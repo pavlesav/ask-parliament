@@ -13,8 +13,9 @@ stage by stage — no RAG frameworks, every component explicit.
 
 ## Status
 
-🚧 Early — **Phase 0 (data inventory) complete.** See [DATA_MAP.md](DATA_MAP.md) for the
-full corpus inventory and schemas.
+🚧 In progress — **Phase 1 complete**: persistent ChromaDB index of 99,089 Austrian
+parliamentary speeches (1996–2022) with precomputed BGE-m3 vectors and full citation
+metadata. See [DATA_MAP.md](DATA_MAP.md) for the corpus inventory and schemas.
 
 ## Planned architecture
 

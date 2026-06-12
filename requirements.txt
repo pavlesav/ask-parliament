@@ -1,0 +1,16 @@
+# Core data handling
+pandas>=2.0
+numpy>=1.26
+
+# Vector store
+chromadb>=0.5
+
+# Query embedding (BGE-m3, must match thesis vectors)
+sentence-transformers>=3.0
+
+# Generation
+anthropic>=0.40
+python-dotenv>=1.0
+
+# UI
+streamlit>=1.35

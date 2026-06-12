@@ -45,11 +45,21 @@ The short version:
 | UI | Streamlit chat | author knows it well |
 | Eval | golden set, recall@k + MRR | explainable, no LLM-judge dependency |
 
+## Corpus (Phase 1 decision)
+
+**Austria, full range 1996–2022**: `Speaker_role == "Regular"`, `Text_English` ≥ 300 chars
+→ **99,089 speeches**, English-MT text + precomputed English BGE-m3 speech vectors.
+Chairperson/Guest turns dropped; GB excluded (no speech vectors); HR deferred.
+Collection `speeches_at` in `chroma_db/` (cosine), ~2.7 GB on disk, ~9 min build.
+Metadata per record: `date, year, speaker, speaker_id, party, party_status, cap_domain,
+topic_name, segment_id` (party code `GRÜNE` normalized to `Grüne`; native German text NOT
+stored in the index — kept lean, can be joined back via `ID` later if wanted).
+
 ## Phase status
 
 - [x] **Phase 0 — Inventory**: `DATA_MAP.md` written; embeddings/granularity verified.
-- [ ] **Phase 1 — Corpus selection + ingestion** (`scripts/build_index.py`): awaiting
-  corpus-subset decision at phase gate (options in DATA_MAP §9–10).
+- [x] **Phase 1 — Corpus selection + ingestion**: `scripts/build_index.py` built and
+  verified (count match, self-retrieval distance ~1e-7, metadata filter checks).
 - [ ] Phase 2 — Retrieval module + CLI (`src/ask_parliament/retrieval.py`, `scripts/search.py`)
 - [ ] Phase 3 — Grounded generation (`src/ask_parliament/generation.py`)
 - [ ] Phase 4 — Streamlit app (`app.py`)
@@ -58,4 +68,8 @@ The short version:
 
 ## How to run
 
-Nothing runnable yet (Phase 0 only produced documentation).
+```bash
+pip install -r requirements.txt
+pip install -e .                      # registers src/ask_parliament for script imports
+python scripts/build_index.py        # idempotent; --rebuild to force; needs ~4 GB RAM
+```
