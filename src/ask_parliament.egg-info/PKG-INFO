@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: ask-parliament
-Version: 0.1.0
-Summary: RAG chat over ParlaMint parliamentary speeches with grounded, cited answers
-Requires-Python: >=3.10
-License-File: LICENSE
-Dynamic: license-file

@@ -8,6 +8,7 @@ chroma_db/
 *.parquet
 
 # Python
+*.egg-info/
 __pycache__/
 *.pyc
 *.pyo
