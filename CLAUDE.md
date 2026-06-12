@@ -60,7 +60,10 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
 - [x] **Phase 0 — Inventory**: `DATA_MAP.md` written; embeddings/granularity verified.
 - [x] **Phase 1 — Corpus selection + ingestion**: `scripts/build_index.py` built and
   verified (count match, self-retrieval distance ~1e-7, metadata filter checks).
-- [ ] Phase 2 — Retrieval module + CLI (`src/ask_parliament/retrieval.py`, `scripts/search.py`)
+- [x] **Phase 2 — Retrieval module + CLI**: `Retriever.search()` with metadata filters
+  (country, year range, CAP domains, party); verified incl. cross-lingual German queries.
+  Note for Phase 3: hits can cluster in one debate segment (e.g. all top-3 from the same
+  sitting) — consider over-fetching + per-segment diversification for generation context.
 - [ ] Phase 3 — Grounded generation (`src/ask_parliament/generation.py`)
 - [ ] Phase 4 — Streamlit app (`app.py`)
 - [ ] Phase 5 — Evaluation (`eval/golden_set.jsonl`, `eval/run_eval.py`)
@@ -72,4 +75,7 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
 pip install -r requirements.txt
 pip install -e .                      # registers src/ask_parliament for script imports
 python scripts/build_index.py        # idempotent; --rebuild to force; needs ~4 GB RAM
+python scripts/search.py "refugee crisis" --year-from 2015 --year-to 2016 --k 5
 ```
+`search.py` filters: `--country --year-from --year-to --domain (repeatable) --party --chars`.
+First query in a process loads BGE-m3 (~5-7 s); warm queries embed in <1 s.

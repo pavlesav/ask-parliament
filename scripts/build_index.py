@@ -23,6 +23,7 @@ from ask_parliament.config import (
     AT_FINAL_PKL,
     CHROMA_DIR,
     COLLECTION_NAME,
+    COUNTRY,
     EMBEDDING_DIM,
     EXPECTED_SPEECH_COUNT,
     MIN_TEXT_CHARS,
@@ -115,6 +116,8 @@ def build(corpus: pd.DataFrame, collection: chromadb.Collection) -> None:
         .rename(columns=METADATA_COLUMNS)
         .to_dict(orient="records")
     )
+    for m in metadatas:
+        m["country"] = COUNTRY
 
     t0 = time.time()
     for start in range(0, len(ids), UPSERT_BATCH):

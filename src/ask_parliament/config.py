@@ -19,6 +19,9 @@ CHROMA_DIR = REPO_ROOT / "chroma_db"
 COLLECTION_NAME = "speeches_at"
 
 # --- Corpus selection (Phase 1 decision: Austria, full range 1996-2022) ---
+# Country code stored in every record's metadata (the store is single-country
+# today; the field keeps the schema honest for a future HR ingest).
+COUNTRY = "AT"
 # Regular speakers only: drops ~125k Chairperson procedural turns and 440 Guests.
 SPEAKER_ROLE = "Regular"
 # Drop trivially short interventions (interjection fragments, one-liners).
