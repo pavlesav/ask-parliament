@@ -70,7 +70,13 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
   One explicit retry on transient errors (SDK `max_retries=0`); clear messages on
   auth/400. Verified: correct [n] citations, speaker attribution, and the "context
   doesn't contain the answer" guardrail (refuses to fabricate). CLI: `scripts/ask.py`.
-- [ ] Phase 4 — Streamlit app (`app.py`)
+- [x] **Phase 4 — Streamlit app** (`app.py`): chat UI with sidebar filters (country
+  multiselect, year-range slider, CAP-domain multiselect, top-k, model selector),
+  expandable Sources per answer, token/latency caption. Retriever cached with
+  `@st.cache_resource` (BGE-m3 loads once); facets cached with `@st.cache_data`.
+  Retrieval `country`→`countries` (list, `$in`) for multi-country readiness;
+  `Retriever.facets()` populates filters from the index (paginated get). Verified
+  end-to-end via Streamlit AppTest.
 - [ ] Phase 5 — Evaluation (`eval/golden_set.jsonl`, `eval/run_eval.py`)
 - [ ] Stretch: hybrid BM25+vector, Docker, FastAPI split
 
@@ -90,3 +96,8 @@ First query in a process loads BGE-m3 (~5-7 s); warm queries embed in <1 s.
 python scripts/ask.py "What did MPs say about the 2015 refugee crisis?" --year-from 2015 --year-to 2016
 ```
 `ask.py` takes the same filters as `search.py`, plus `--model` (default `claude-haiku-4-5`).
+
+```bash
+# Streamlit chat app
+streamlit run app.py
+```

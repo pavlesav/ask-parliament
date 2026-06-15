@@ -38,7 +38,7 @@ def main() -> None:
     hits = retriever.search(
         args.query,
         k=args.k,
-        country=args.country,
+        countries=[args.country] if args.country else None,
         year_from=args.year_from,
         year_to=args.year_to,
         cap_domains=args.domain,

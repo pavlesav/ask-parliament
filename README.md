@@ -13,9 +13,21 @@ stage by stage — no RAG frameworks, every component explicit.
 
 ## Status
 
-🚧 In progress — **Phase 1 complete**: persistent ChromaDB index of 99,089 Austrian
-parliamentary speeches (1996–2022) with precomputed BGE-m3 vectors and full citation
-metadata. See [DATA_MAP.md](DATA_MAP.md) for the corpus inventory and schemas.
+🚧 In progress — **working end to end**: a Streamlit chat app answers natural-language
+questions over 99,089 Austrian parliamentary speeches (1996–2022), grounded in retrieved
+speeches with citations and sidebar filters (country, year range, policy domain, top-k).
+Built on a persistent ChromaDB index of precomputed BGE-m3 vectors. Remaining: evaluation
+(Phase 5). See [DATA_MAP.md](DATA_MAP.md) for the corpus inventory and schemas.
+
+## Run it
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+# Put ANTHROPIC_API_KEY in .env (gitignored)
+python scripts/build_index.py     # builds the Chroma index from the thesis pickle
+streamlit run app.py              # chat UI
+```
 
 ## Planned architecture
 

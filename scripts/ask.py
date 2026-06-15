@@ -36,8 +36,10 @@ def main() -> None:
 
     retriever = Retriever()
     hits = retriever.search(
-        args.question, k=args.k, country=args.country, year_from=args.year_from,
-        year_to=args.year_to, cap_domains=args.domain, party=args.party,
+        args.question, k=args.k,
+        countries=[args.country] if args.country else None,
+        year_from=args.year_from, year_to=args.year_to,
+        cap_domains=args.domain, party=args.party,
     )
     result = generate_answer(args.question, hits, model=args.model)
 

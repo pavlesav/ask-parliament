@@ -16,6 +16,17 @@ from ask_parliament.config import CHROMA_DIR, COLLECTION_NAME, EMBEDDING_MODEL
 
 
 @dataclass
+class Facets:
+    """Distinct filter values present in the index, for populating the UI."""
+
+    countries: list[str]
+    parties: list[str]
+    cap_domains: list[str]
+    year_min: int
+    year_max: int
+
+
+@dataclass
 class RetrievedSpeech:
     """One retrieval hit with everything needed to display and cite it."""
 
@@ -35,7 +46,7 @@ class RetrievedSpeech:
 
 
 def build_where(
-    country: str | None = None,
+    countries: list[str] | None = None,
     year_from: int | None = None,
     year_to: int | None = None,
     cap_domains: list[str] | None = None,
@@ -47,8 +58,8 @@ def build_where(
     several, so we collect then wrap.
     """
     clauses: list[dict] = []
-    if country:
-        clauses.append({"country": {"$eq": country}})
+    if countries:
+        clauses.append({"country": {"$in": countries}})
     if year_from is not None:
         clauses.append({"year": {"$gte": year_from}})
     if year_to is not None:
@@ -81,6 +92,36 @@ class Retriever:
             self._model = SentenceTransformer(EMBEDDING_MODEL)
         return self._model
 
+    def facets(self) -> Facets:
+        """Scan the collection's metadata once to list available filter values.
+
+        Chroma has no DISTINCT, so we sweep all metadatas (cheap fields only, no
+        embeddings or documents) and reduce. Paginated because a single get() over
+        the whole collection trips SQLite's variable limit. Cached at app startup.
+        """
+        countries, parties, cap_domains = set(), set(), set()
+        year_min, year_max = None, None
+        batch = 10_000
+        for offset in range(0, self.collection.count(), batch):
+            metas = self.collection.get(
+                include=["metadatas"], limit=batch, offset=offset
+            )["metadatas"]
+            for m in metas:
+                countries.add(m["country"])
+                cap_domains.add(m["cap_domain"])
+                if m["party"] != "-":
+                    parties.add(m["party"])
+                y = m["year"]
+                year_min = y if year_min is None else min(year_min, y)
+                year_max = y if year_max is None else max(year_max, y)
+        return Facets(
+            countries=sorted(countries),
+            parties=sorted(parties),
+            cap_domains=sorted(cap_domains),
+            year_min=year_min,
+            year_max=year_max,
+        )
+
     def embed_query(self, query: str) -> list[float]:
         # Plain encode(), no instruction prefix: BGE-m3 takes none, and the
         # thesis embedded documents the same way. The model L2-normalizes.
@@ -90,7 +131,7 @@ class Retriever:
         self,
         query: str,
         k: int = 8,
-        country: str | None = None,
+        countries: list[str] | None = None,
         year_from: int | None = None,
         year_to: int | None = None,
         cap_domains: list[str] | None = None,
@@ -102,7 +143,7 @@ class Retriever:
         res = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=k,
-            where=build_where(country, year_from, year_to, cap_domains, party),
+            where=build_where(countries, year_from, year_to, cap_domains, party),
             include=["documents", "metadatas", "distances"],
         )
         self.last_timings = {"embed_s": t1 - t0, "search_s": time.time() - t1}
