@@ -77,8 +77,14 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
   Retrieval `country`→`countries` (list, `$in`) for multi-country readiness;
   `Retriever.facets()` populates filters from the index (paginated get). Verified
   end-to-end via Streamlit AppTest.
-- [ ] Phase 5 — Evaluation (`eval/golden_set.jsonl`, `eval/run_eval.py`)
-- [ ] Stretch: hybrid BM25+vector, Docker, FastAPI split
+- [x] **Phase 5 — Evaluation**: `eval/golden_set.jsonl` (15 questions, each tied to a
+  real debate; relevant set defined lexically + date-windowed, embedding-independent,
+  stored as an auditable criterion). `eval/run_eval.py` reports recall@k, MRR, hit@10
+  under two conditions (unfiltered vs year-scoped). Result: year-scoping ~doubles MRR
+  (0.23→0.50) and hit@10 (0.40→0.80). `eval/README.md` + main README explain it.
+  The two clean misses (minimum_wage, pension_reform) motivate the hybrid-retrieval stretch.
+- [ ] Stretch: hybrid BM25+vector, Docker, FastAPI split. (Note: README still needs a
+  screenshot/GIF — must be captured from a real browser; the author does this.)
 
 ## How to run
 
