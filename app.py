@@ -59,7 +59,12 @@ with st.sidebar:
         "Year range", facets.year_min, facets.year_max,
         (facets.year_min, facets.year_max),
     )
-    sel_domains = st.multiselect("Policy domain (CAP)", facets.cap_domains)
+    sel_domains = st.multiselect(
+        "Policy domain (optional)", facets.cap_domains,
+        help="Leave empty (the default) to search all speeches. Domain labels are "
+        "approximate — assigned per debate segment — so filtering may miss relevant "
+        "speeches. Semantic search already finds on-topic speeches without it.",
+    )
     top_k = st.slider("Speeches to retrieve (top-k)", 3, 20, 8)
 
     st.divider()
