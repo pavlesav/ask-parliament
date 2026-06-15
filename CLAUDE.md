@@ -7,6 +7,11 @@ master's thesis at `../master-thesis`. Two goals, in order: (1) the author learn
 RAG by building every stage explicitly; (2) portfolio piece. Bar: "junior engineer who
 understands every stage", not "framework showcase".
 
+**Current state:** feature-complete end to end — ingestion → retrieval → grounded generation
+→ Streamlit chat → evaluation, plus hybrid BM25+vector retrieval (Phases 0–5 + first stretch
+done; see Phase status below). Remaining stretch: Dockerfile/compose and a FastAPI↔Streamlit
+split. README needs a screenshot/GIF (the author adds this manually).
+
 ## Hard rules
 
 - **No LangChain/LlamaIndex.** Direct API calls, thin self-written orchestration.
@@ -112,6 +117,12 @@ python scripts/ask.py "What did MPs say about the 2015 refugee crisis?" --year-f
 `ask.py` takes the same filters as `search.py`, plus `--model` (default `claude-haiku-4-5`).
 
 ```bash
-# Streamlit chat app
+# Streamlit chat app (hybrid retrieval default; toggle to semantic in the sidebar)
 streamlit run app.py
+
+# Retrieval evaluation (recall@k, MRR, hit@10)
+python eval/run_eval.py                 # vector
+python eval/run_eval.py --method hybrid  # BM25 + vector
 ```
+Hybrid (`--hybrid` on the CLIs, default in the app) builds a BM25 index over all speeches
+in-process (~1 min on a weak laptop) and fuses with vector results via RRF.

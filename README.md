@@ -25,8 +25,13 @@ pip install -r requirements.txt
 pip install -e .                 # registers the src/ask_parliament package
 # Put ANTHROPIC_API_KEY in .env (gitignored)
 python scripts/build_index.py    # build the Chroma index from the thesis pickle
-streamlit run app.py             # chat UI
+streamlit run app.py             # chat UI (opens http://localhost:8501)
 ```
+
+> **Note:** `build_index.py` reads the thesis's processed `AT_final.pkl` (the speeches +
+> precomputed BGE-m3 vectors), which is gitignored and not part of this repo — it's available
+> on request. Without it you can still read all the code and the evaluation methodology, but
+> can't build the index locally.
 
 CLIs for poking at the pipeline without the UI:
 
@@ -52,11 +57,34 @@ python eval/run_eval.py [--method hybrid]                            # retrieval
    assembles numbered speeches + the question into a prompt and asks Claude to answer
    **only** from that context, with `[n]` citations, and to say so when the context doesn't
    contain the answer. Returns a structured result (answer + sources + token/latency).
-4. **UI** ([app.py](app.py)) — Streamlit chat with the sidebar filters, an expandable
-   *Sources* section per answer, and a token/latency caption so cost is visible.
+4. **UI** ([app.py](app.py)) — Streamlit chat with the sidebar filters, a retrieval-mode
+   toggle (hybrid vs semantic), an expandable *Sources* section per answer, and a
+   token/latency caption so cost is visible.
 
 See [DATA_MAP.md](DATA_MAP.md) for the corpus inventory and schemas, and
 [CLAUDE.md](CLAUDE.md) for architecture decisions.
+
+## Repository layout
+
+```
+ask-parliament/
+├── app.py                      # Streamlit chat UI
+├── scripts/
+│   ├── build_index.py          # ingest the thesis pickle → ChromaDB
+│   ├── search.py               # retrieval-only CLI (--hybrid optional)
+│   └── ask.py                  # retrieval + grounded answer CLI
+├── src/ask_parliament/
+│   ├── config.py               # paths, model names, filter constants
+│   ├── retrieval.py            # vector search, metadata filters, facets
+│   ├── hybrid.py               # BM25 + vector fusion (RRF)
+│   └── generation.py           # grounded answer generation (Claude)
+├── eval/
+│   ├── golden_set.jsonl        # 15 questions + reproducible relevance criteria
+│   ├── run_eval.py             # recall@k, MRR, hit@10
+│   └── README.md               # evaluation methodology
+├── DATA_MAP.md                 # corpus inventory (data provenance)
+└── CLAUDE.md                   # architecture decisions & build log
+```
 
 ## Architecture choices
 
@@ -66,6 +94,7 @@ See [DATA_MAP.md](DATA_MAP.md) for the corpus inventory and schemas, and
 | Embeddings | BAAI/bge-m3 (1024-d, multilingual) | must match the thesis vectors so they can be reused |
 | Distance | cosine | some stored vectors are chunk-averaged and not unit-norm |
 | Retrieval unit | speech-level | clean citations; debate segments average 9–18 speeches |
+| Hybrid fusion | Reciprocal Rank Fusion (RRF) | combines BM25 + vector by rank, no score normalization |
 | Generation | Anthropic Claude (Haiku default, Sonnet switchable) | cheap iteration, quality on demand |
 | Evaluation | golden set, recall@k + MRR | explainable, no LLM-as-judge |
 
