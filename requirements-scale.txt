@@ -1,0 +1,15 @@
+# Extra dependencies for the full-ParlaMint scaling pipeline (scripts/scale/).
+# The base requirements.txt still covers the Streamlit app and Austria demo.
+#   pip install -r requirements-scale.txt
+
+# Download + extraction
+requests>=2.31
+
+# Parsed corpus + embedding shards (pandas .to_parquet / .read_parquet backend)
+pyarrow>=15
+
+# GPU embedding. sentence-transformers (in requirements.txt) pulls in torch, but
+# the default wheel is often CPU-only. For the real run install a CUDA build that
+# matches your driver, e.g. CUDA 12.4:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.2
