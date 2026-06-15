@@ -64,7 +64,12 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
   (country, year range, CAP domains, party); verified incl. cross-lingual German queries.
   Note for Phase 3: hits can cluster in one debate segment (e.g. all top-3 from the same
   sitting) — consider over-fetching + per-segment diversification for generation context.
-- [ ] Phase 3 — Grounded generation (`src/ask_parliament/generation.py`)
+- [x] **Phase 3 — Grounded generation**: `generate_answer()` assembles numbered
+  context + question, calls Claude (plain `messages.create`, no thinking/effort — works
+  across Haiku/Sonnet), returns a `GenerationResult` (answer + sources + usage + latency).
+  One explicit retry on transient errors (SDK `max_retries=0`); clear messages on
+  auth/400. Verified: correct [n] citations, speaker attribution, and the "context
+  doesn't contain the answer" guardrail (refuses to fabricate). CLI: `scripts/ask.py`.
 - [ ] Phase 4 — Streamlit app (`app.py`)
 - [ ] Phase 5 — Evaluation (`eval/golden_set.jsonl`, `eval/run_eval.py`)
 - [ ] Stretch: hybrid BM25+vector, Docker, FastAPI split
@@ -79,3 +84,9 @@ python scripts/search.py "refugee crisis" --year-from 2015 --year-to 2016 --k 5
 ```
 `search.py` filters: `--country --year-from --year-to --domain (repeatable) --party --chars`.
 First query in a process loads BGE-m3 (~5-7 s); warm queries embed in <1 s.
+
+```bash
+# Grounded Q&A end-to-end (needs ANTHROPIC_API_KEY in .env)
+python scripts/ask.py "What did MPs say about the 2015 refugee crisis?" --year-from 2015 --year-to 2016
+```
+`ask.py` takes the same filters as `search.py`, plus `--model` (default `claude-haiku-4-5`).
