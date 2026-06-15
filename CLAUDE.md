@@ -8,9 +8,9 @@ RAG by building every stage explicitly; (2) portfolio piece. Bar: "junior engine
 understands every stage", not "framework showcase".
 
 **Current state:** feature-complete end to end — ingestion → retrieval → grounded generation
-→ Streamlit chat → evaluation, plus hybrid BM25+vector retrieval (Phases 0–5 + first stretch
-done; see Phase status below). Remaining stretch: Dockerfile/compose and a FastAPI↔Streamlit
-split. README needs a screenshot/GIF (the author adds this manually).
+→ Streamlit chat → evaluation, plus hybrid BM25+vector retrieval and small-to-big segment
+context expansion (Phases 0–5 + two stretches done; see Phase status below). Remaining
+stretch: Dockerfile/compose and a FastAPI↔Streamlit split.
 
 ## Hard rules
 
@@ -50,6 +50,7 @@ The short version:
 | UI | Streamlit chat | author knows it well |
 | Eval | golden set, recall@k + MRR | explainable, no LLM-judge dependency |
 | Hybrid fusion | Reciprocal Rank Fusion (RRF) | combines by rank, no score normalization; explainable |
+| Context assembly | small-to-big: retrieve speech, expand to its debate segment | conversational context for generation without losing per-speech citations; reuses the index, no re-embedding |
 
 ## Corpus (Phase 1 decision)
 
@@ -68,8 +69,8 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
   verified (count match, self-retrieval distance ~1e-7, metadata filter checks).
 - [x] **Phase 2 — Retrieval module + CLI**: `Retriever.search()` with metadata filters
   (country, year range, CAP domains, party); verified incl. cross-lingual German queries.
-  Note for Phase 3: hits can cluster in one debate segment (e.g. all top-3 from the same
-  sitting) — consider over-fetching + per-segment diversification for generation context.
+  (Observed here, addressed by the small-to-big stretch below: hits cluster in one debate
+  segment — turned from a problem into the basis for segment context expansion.)
 - [x] **Phase 3 — Grounded generation**: `generate_answer()` assembles numbered
   context + question, calls Claude (plain `messages.create`, no thinking/effort — works
   across Haiku/Sonnet), returns a `GenerationResult` (answer + sources + usage + latency).
@@ -96,8 +97,17 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
   identical hit@10) — helps exact-term/recurring queries, demotes lone dense winners
   (RRF favors consensus). Reported honestly; fusion-weight tuning left as future work
   (avoid overfitting 15 questions).
-- [ ] Stretch remaining: Docker, FastAPI split. (Note: README still needs a
-  screenshot/GIF — must be captured from a real browser; the author does this.)
+- [x] **Stretch — segment context expansion (small-to-big)**
+  (`Retriever.expand_to_segments`): retrieval still returns speech-level hits as the
+  citation anchors; before generation each hit is expanded to its sibling speeches in the
+  same debate segment (ordered by spoken sequence via the trailing TEI id, windowed to
+  `max_per_segment`, siblings truncated to `sibling_char_cap`), so the model sees the
+  surrounding exchange while citations stay pinned to the matched speech. `format_context`
+  groups by debate with headers and flags context turns; numbering is continuous so `[n]`
+  matches everywhere (prompt + Sources). Default on in the app (toggle) and `ask.py`
+  (`--no-expand`). Orthogonal to the retrieval eval — it changes generation context, not
+  ranking, so the recall@k/MRR numbers are unaffected.
+- [ ] Stretch remaining: Docker, FastAPI split.
 
 ## How to run
 
@@ -114,10 +124,11 @@ First query in a process loads BGE-m3 (~5-7 s); warm queries embed in <1 s.
 # Grounded Q&A end-to-end (needs ANTHROPIC_API_KEY in .env)
 python scripts/ask.py "What did MPs say about the 2015 refugee crisis?" --year-from 2015 --year-to 2016
 ```
-`ask.py` takes the same filters as `search.py`, plus `--model` (default `claude-haiku-4-5`).
+`ask.py` takes the same filters as `search.py`, plus `--model` (default `claude-haiku-4-5`)
+and `--expand`/`--no-expand` (small-to-big debate context, on by default).
 
 ```bash
-# Streamlit chat app (hybrid retrieval default; toggle to semantic in the sidebar)
+# Streamlit chat app (hybrid retrieval + "Expand to full debate" on by default; both toggle in the sidebar)
 streamlit run app.py
 
 # Retrieval evaluation (recall@k, MRR, hit@10)

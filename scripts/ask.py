@@ -28,6 +28,8 @@ def main() -> None:
     parser.add_argument("question", help="natural-language question")
     parser.add_argument("--k", type=int, default=8, help="speeches to retrieve (default 8)")
     parser.add_argument("--hybrid", action="store_true", help="fuse BM25 + vector (RRF)")
+    parser.add_argument("--expand", action=argparse.BooleanOptionalAction, default=True,
+                        help="add same-debate context to each hit (default on; --no-expand to disable)")
     parser.add_argument("--country", help="country code filter, e.g. AT")
     parser.add_argument("--year-from", type=int, help="earliest year (inclusive)")
     parser.add_argument("--year-to", type=int, help="latest year (inclusive)")
@@ -44,6 +46,8 @@ def main() -> None:
         year_from=args.year_from, year_to=args.year_to,
         cap_domains=args.domain, party=args.party,
     )
+    if args.expand:
+        hits = retriever.expand_to_segments(hits)
     result = generate_answer(args.question, hits, model=args.model)
 
     print("\n" + "=" * 100)
@@ -53,7 +57,8 @@ def main() -> None:
     print("\nSources:")
     for i, h in enumerate(result.sources, 1):
         status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
-        print(f"  [{i}] sim={h.similarity:.3f}  {h.speaker} ({h.party}{status})  "
+        score = f"sim={h.similarity:.3f}" if h.is_anchor else "context   "
+        print(f"  [{i}] {score}  {h.speaker} ({h.party}{status})  "
               f"{h.date}  {h.cap_domain}")
 
     retrieval_s = sum(searcher.last_timings.values())

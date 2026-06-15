@@ -53,13 +53,20 @@ python eval/run_eval.py [--method hybrid]                            # retrieval
    optional metadata filters (country, year range, CAP domain, party). An optional
    **hybrid** mode ([hybrid.py](src/ask_parliament/hybrid.py)) fuses BM25 keyword search
    with the vector results via Reciprocal Rank Fusion.
-3. **Generation** ([src/ask_parliament/generation.py](src/ask_parliament/generation.py)) —
-   assembles numbered speeches + the question into a prompt and asks Claude to answer
-   **only** from that context, with `[n]` citations, and to say so when the context doesn't
-   contain the answer. Returns a structured result (answer + sources + token/latency).
-4. **UI** ([app.py](app.py)) — Streamlit chat with the sidebar filters, a retrieval-mode
-   toggle (hybrid vs semantic), an expandable *Sources* section per answer, and a
-   token/latency caption so cost is visible.
+3. **Context assembly — small-to-big** ([src/ask_parliament/retrieval.py](src/ask_parliament/retrieval.py),
+   `expand_to_segments`) — the speech-level hits stay the citation anchors, but each is then
+   expanded to its sibling speeches in the same debate segment (ordered as they were spoken,
+   windowed and length-capped) so generation sees the surrounding exchange instead of isolated
+   turns. On by default; toggle off to compare.
+4. **Generation** ([src/ask_parliament/generation.py](src/ask_parliament/generation.py)) —
+   assembles the speeches (grouped by debate) + the question into a prompt and asks Claude to
+   answer **only** from that context, with `[n]` citations pinned to the speech each claim comes
+   from, and to say so when the context doesn't contain the answer. Returns a structured result
+   (answer + sources + token/latency).
+5. **UI** ([app.py](app.py)) — Streamlit chat with the sidebar filters, a retrieval-mode
+   toggle (hybrid vs semantic), an *Expand to full debate* toggle, an expandable *Sources*
+   section per answer (matched speeches vs added debate context), and a token/latency caption
+   so cost is visible.
 
 See [DATA_MAP.md](DATA_MAP.md) for the corpus inventory and schemas, and
 [CLAUDE.md](CLAUDE.md) for architecture decisions.
@@ -95,6 +102,7 @@ ask-parliament/
 | Distance | cosine | some stored vectors are chunk-averaged and not unit-norm |
 | Retrieval unit | speech-level | clean citations; debate segments average 9–18 speeches |
 | Hybrid fusion | Reciprocal Rank Fusion (RRF) | combines BM25 + vector by rank, no score normalization |
+| Context assembly | small-to-big: retrieve speech, expand to its debate segment | conversational context for generation without losing per-speech citations; no re-embedding |
 | Generation | Anthropic Claude (Haiku default, Sonnet switchable) | cheap iteration, quality on demand |
 | Evaluation | golden set, recall@k + MRR | explainable, no LLM-as-judge |
 

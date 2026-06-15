@@ -33,6 +33,9 @@ Rules:
 or assumptions about what was said.
 - Cite the speeches you draw on with bracketed numbers like [1] or [2], matching \
 the numbers in the context. Attach a citation to each claim.
+- Speeches from one debate are grouped under a "Debate:" header in the order they \
+were spoken; turns marked "· context" are the surrounding exchange, given for \
+background. Cite whichever speech a statement actually comes from.
 - If the provided speeches do not contain enough information to answer, say so \
 plainly (e.g. "The retrieved speeches don't address this") instead of guessing.
 - Be concise and neutral. Attribute views to the speakers, not to yourself.
@@ -54,12 +57,29 @@ class GenerationResult:
 
 
 def format_context(hits: list[RetrievedSpeech]) -> str:
-    """Render retrieved speeches as numbered blocks with citation headers."""
-    blocks = []
-    for i, h in enumerate(hits, 1):
-        status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
-        header = f"[{i}] {h.speaker} ({h.party}{status}) — {h.date} — {h.cap_domain}"
-        blocks.append(f"{header}\n{h.text.strip()}")
+    """Render speeches as numbered blocks with citation headers.
+
+    Consecutive speeches from the same segment (set up by expand_to_segments) are
+    introduced with a "Debate:" header so the model can see the exchange as one
+    conversation; context turns are flagged. Numbering follows list order, so [n]
+    matches the n-th speech everywhere it is shown (prompt and Sources panel).
+    """
+    blocks, num, i, n = [], 0, 0, len(hits)
+    while i < n:
+        seg = hits[i].segment_id
+        j = i
+        while j < n and hits[j].segment_id == seg:
+            j += 1
+        run = hits[i:j]
+        if seg not in ("-", "") and len(run) > 1:
+            blocks.append(f"--- Debate: {run[0].topic_name} · {run[0].date} ---")
+        for h in run:
+            num += 1
+            status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
+            tag = "" if h.is_anchor else " · context"
+            header = f"[{num}] {h.speaker} ({h.party}{status}) — {h.date} — {h.cap_domain}{tag}"
+            blocks.append(f"{header}\n{h.text.strip()}")
+        i = j
     return "\n\n".join(blocks)
 
 

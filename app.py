@@ -38,15 +38,30 @@ def get_facets(_retriever: Retriever):
 
 
 def render_sources(sources) -> None:
-    """Expandable list of the speeches an answer was grounded in."""
+    """Expandable list of the speeches an answer was grounded in.
+
+    Matched speeches show their similarity; sibling turns added for debate context
+    are flagged instead. Numbering matches the [n] citations in the answer.
+    """
     if not sources:
         return
-    with st.expander(f"Sources ({len(sources)})"):
+    n_matched = sum(h.is_anchor for h in sources)
+    label = f"Sources ({n_matched} matched"
+    label += f" + {len(sources) - n_matched} context)" if len(sources) > n_matched else ")"
+    with st.expander(label):
+        prev_seg = None
         for i, h in enumerate(sources, 1):
+            if h.is_anchor:
+                score = f"similarity {h.similarity:.3f}"
+            else:
+                score = "context · same debate"
+                if h.segment_id != prev_seg:  # head the debate group once
+                    st.caption(f"↳ {h.topic_name} · {h.date}")
+            prev_seg = h.segment_id
             status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
             st.markdown(
                 f"**[{i}]** {h.speaker} ({h.party}{status}) · {h.date} · "
-                f"{h.country} · *{h.cap_domain}* · similarity {h.similarity:.3f}"
+                f"{h.country} · *{h.cap_domain}* · {score}"
             )
             st.markdown(f"> {h.text.strip()}")
             if i < len(sources):
@@ -77,6 +92,12 @@ with st.sidebar:
         "Retrieval", ["Hybrid (semantic + keyword)", "Semantic only"],
         help="Hybrid fuses BM25 keyword matching with dense vector search via "
         "reciprocal rank fusion — better on exact terms (names, specific phrases).",
+    )
+    expand_debate = st.checkbox(
+        "Expand to full debate", value=True,
+        help="Small-to-big retrieval: after finding the best-matching speeches, "
+        "also pull the surrounding turns from the same debate so the answer has "
+        "conversational context. Citations stay pinned to the matched speech.",
     )
 
     st.divider()
@@ -125,6 +146,10 @@ if prompt := st.chat_input("Ask about parliamentary debates…"):
                 year_to=year_to,
                 cap_domains=sel_domains or None,
             )
+            if expand_debate:
+                # retriever is the base vector Retriever; it owns the collection
+                # the siblings are fetched from (hybrid shares the same one).
+                hits = retriever.expand_to_segments(hits)
             result = generate_answer(prompt, hits, model=model)
 
         st.markdown(result.answer)

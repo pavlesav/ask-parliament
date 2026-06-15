@@ -6,6 +6,7 @@ cosine search in Chroma, optionally constrained by metadata filters.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 
@@ -13,6 +14,23 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 
 from ask_parliament.config import CHROMA_DIR, COLLECTION_NAME, EMBEDDING_MODEL
+
+# Speeches within a segment are ordered by the trailing TEI element number in
+# their ID (…_d7e2404 → 2404), which increases in the order they were spoken.
+_TRAILING_INT = re.compile(r"(\d+)$")
+
+
+def _sequence_key(speech_id: str) -> int:
+    m = _TRAILING_INT.search(speech_id)
+    return int(m.group(1)) if m else 0
+
+
+def _truncate(text: str, cap: int) -> str:
+    """Trim a context speech to `cap` chars on a word boundary, with a marker."""
+    text = text.strip()
+    if len(text) <= cap:
+        return text
+    return text[:cap].rsplit(" ", 1)[0].rstrip() + " …[speech truncated]"
 
 
 @dataclass
@@ -43,6 +61,7 @@ class RetrievedSpeech:
     cap_domain: str
     topic_name: str
     segment_id: str
+    is_anchor: bool = True  # False for siblings pulled in as surrounding-debate context
 
 
 def build_where(
@@ -170,3 +189,96 @@ class Retriever:
                 )
             )
         return hits
+
+    def expand_to_segments(
+        self,
+        hits: list[RetrievedSpeech],
+        max_per_segment: int = 8,
+        sibling_char_cap: int = 1200,
+    ) -> list[RetrievedSpeech]:
+        """Small-to-big context: keep the retrieved speeches as citation anchors
+        and add their sibling speeches from the same debate segment, so the model
+        sees the surrounding exchange instead of isolated turns.
+
+        Returns a flat list in reading order — segments in best-anchor-first order,
+        speeches within a segment in the order they were spoken — each tagged with
+        is_anchor. Siblings are truncated to sibling_char_cap chars; anchors keep
+        their full text. Speeches with no segment id are left as lone anchors.
+        """
+        if not hits:
+            return hits
+        anchor_by_id = {h.id: h for h in hits}
+
+        out: list[RetrievedSpeech] = []
+        seen: set[str] = set()
+        for h in hits:
+            seg = h.segment_id
+            if seg in ("-", ""):
+                out.append(h)  # no segment to expand into
+                continue
+            if seg in seen:
+                continue  # already emitted as part of its segment group
+            seen.add(seg)
+            out.extend(
+                self._segment_members(seg, anchor_by_id, max_per_segment, sibling_char_cap)
+            )
+        return out
+
+    def _segment_members(
+        self,
+        segment_id: str,
+        anchor_by_id: dict[str, RetrievedSpeech],
+        max_per_segment: int,
+        sibling_char_cap: int,
+    ) -> list[RetrievedSpeech]:
+        """All in-index speeches of one segment, ordered, windowed around the
+        anchors. Anchors reuse their original hit (full text + similarity);
+        siblings are truncated context turns."""
+        got = self.collection.get(
+            where={"segment_id": segment_id}, include=["documents", "metadatas"]
+        )
+        members = sorted(
+            zip(got["ids"], got["documents"], got["metadatas"]),
+            key=lambda r: _sequence_key(r[0]),
+        )
+        positions = [i for i, (id_, _, _) in enumerate(members) if id_ in anchor_by_id]
+        keep = (
+            self._window(positions, len(members), max_per_segment)
+            if positions
+            else list(range(min(len(members), max_per_segment)))
+        )
+
+        result = []
+        for i in keep:
+            id_, doc, meta = members[i]
+            if id_ in anchor_by_id:
+                result.append(anchor_by_id[id_])  # full text + real similarity
+            else:
+                result.append(
+                    RetrievedSpeech(
+                        id=id_, text=_truncate(doc, sibling_char_cap), similarity=0.0,
+                        country=meta["country"], date=meta["date"], year=meta["year"],
+                        speaker=meta["speaker"], speaker_id=meta["speaker_id"],
+                        party=meta["party"], party_status=meta["party_status"],
+                        cap_domain=meta["cap_domain"], topic_name=meta["topic_name"],
+                        segment_id=meta["segment_id"], is_anchor=False,
+                    )
+                )
+        return result
+
+    @staticmethod
+    def _window(positions: list[int], n: int, cap: int) -> list[int]:
+        """Contiguous run of indices covering every anchor position, grown outward
+        to `cap` speeches (so the debate reads without gaps). Never drops an anchor:
+        if the anchors alone span more than `cap`, the whole span is kept."""
+        lo, hi = min(positions), max(positions)
+        keep = list(range(lo, hi + 1))
+        left, right = lo - 1, hi + 1
+        while len(keep) < cap and (left >= 0 or right < n):
+            if left >= 0:
+                keep.insert(0, left)
+                left -= 1
+            if len(keep) < cap and right < n:
+                keep.append(right)
+                right += 1
+        return sorted(keep)
