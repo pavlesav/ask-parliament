@@ -44,6 +44,7 @@ The short version:
 | Unit | speech-level | clean citations; segments too long (avg 9–18 speeches) |
 | UI | Streamlit chat | author knows it well |
 | Eval | golden set, recall@k + MRR | explainable, no LLM-judge dependency |
+| Hybrid fusion | Reciprocal Rank Fusion (RRF) | combines by rank, no score normalization; explainable |
 
 ## Corpus (Phase 1 decision)
 
@@ -83,7 +84,14 @@ stored in the index — kept lean, can be joined back via `ID` later if wanted).
   under two conditions (unfiltered vs year-scoped). Result: year-scoping ~doubles MRR
   (0.23→0.50) and hit@10 (0.40→0.80). `eval/README.md` + main README explain it.
   The two clean misses (minimum_wage, pension_reform) motivate the hybrid-retrieval stretch.
-- [ ] Stretch: hybrid BM25+vector, Docker, FastAPI split. (Note: README still needs a
+- [x] **Stretch — hybrid BM25 + vector** (`src/ask_parliament/hybrid.py`): RRF fusion,
+  built on the fly and cached in-process; hybrid is the app default (toggle to compare
+  with semantic), available via `--hybrid` on the CLIs and `--method hybrid` in eval.
+  Eval finding: **roughly neutral** on this corpus (year-scoped MRR 0.42 vs vector 0.50,
+  identical hit@10) — helps exact-term/recurring queries, demotes lone dense winners
+  (RRF favors consensus). Reported honestly; fusion-weight tuning left as future work
+  (avoid overfitting 15 questions).
+- [ ] Stretch remaining: Docker, FastAPI split. (Note: README still needs a
   screenshot/GIF — must be captured from a real browser; the author does this.)
 
 ## How to run

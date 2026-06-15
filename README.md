@@ -32,8 +32,9 @@ CLIs for poking at the pipeline without the UI:
 
 ```bash
 python scripts/search.py "renewable energy" --year-from 2015 --k 8   # retrieval only
+python scripts/search.py "minimum wage" --hybrid                      # BM25 + vector
 python scripts/ask.py "How was mandatory vaccination debated?"        # retrieval + answer
-python eval/run_eval.py                                               # retrieval metrics
+python eval/run_eval.py [--method hybrid]                            # retrieval metrics
 ```
 
 ## How it works
@@ -44,7 +45,9 @@ python eval/run_eval.py                                               # retrieva
    ChromaDB collection. The vectors are reused from the thesis, never recomputed.
 2. **Retrieval** ([src/ask_parliament/retrieval.py](src/ask_parliament/retrieval.py)) —
    embeds the query with the same BGE-m3 model and runs top-k **cosine** search, with
-   optional metadata filters (country, year range, CAP domain, party).
+   optional metadata filters (country, year range, CAP domain, party). An optional
+   **hybrid** mode ([hybrid.py](src/ask_parliament/hybrid.py)) fuses BM25 keyword search
+   with the vector results via Reciprocal Rank Fusion.
 3. **Generation** ([src/ask_parliament/generation.py](src/ask_parliament/generation.py)) —
    assembles numbered speeches + the question into a prompt and asks Claude to answer
    **only** from that context, with `[n]` citations, and to say so when the context doesn't
@@ -97,6 +100,14 @@ relevant set is a whole debate of 7–68 speeches, so when |R| > k even perfect 
 reach 1.0), and the unfiltered scores are a **conservative floor** because the same topic recurs
 on other dates whose speeches are relevant but not in our single-debate judged set.
 
+**Hybrid (BM25 + vector) retrieval** ([src/ask_parliament/hybrid.py](src/ask_parliament/hybrid.py),
+`run_eval.py --method hybrid`) fuses keyword and semantic results with Reciprocal Rank Fusion.
+Measured against the same set it's **roughly a wash** (year-scoped MRR 0.42 vs 0.50, identical
+hit@10, marginally better recall@20): it helps exact-term and recurring queries but demotes the
+cases where dense retrieval was already perfect, since RRF rewards consensus. That the eval
+*showed* this rather than assuming hybrid always wins is the point. Details in
+[eval/README.md](eval/README.md).
+
 ## Limitations
 
 - **One country.** Only Austria is indexed; the UK has no speech-level vectors in the thesis
@@ -106,8 +117,9 @@ on other dates whose speeches are relevant but not in our single-debate judged s
 - **Noisy policy labels.** CAP domains are episode-level and LLM-assigned (~40% "Other/Mix"),
   so the domain filter is optional and off by default — semantic search already finds on-topic
   speeches without it.
-- **Dense-only retrieval.** No lexical/BM25 component yet; the eval shows exact-term queries
-  (e.g. "minimum wage") are where a hybrid retriever would help most.
+- **Retrieval is dense-first.** Hybrid BM25 + vector retrieval is implemented and selectable,
+  but the eval shows it's roughly neutral on this corpus — a tuned fusion weight (favouring the
+  dense side) is plausible future work, deliberately not tuned on 15 questions to avoid overfitting.
 
 ## License
 

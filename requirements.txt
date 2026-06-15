@@ -5,6 +5,9 @@ numpy>=1.26
 # Vector store
 chromadb>=0.5
 
+# Lexical retrieval (hybrid BM25 + vector)
+rank_bm25>=0.2.2
+
 # Query embedding (BGE-m3, must match thesis vectors)
 sentence-transformers>=3.0
 

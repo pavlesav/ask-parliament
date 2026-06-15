@@ -26,6 +26,7 @@ import json
 import re
 from pathlib import Path
 
+from ask_parliament.hybrid import HybridRetriever
 from ask_parliament.retrieval import Retriever
 
 GOLDEN_PATH = Path(__file__).parent / "golden_set.jsonl"
@@ -76,11 +77,15 @@ def metrics_for(hits, relevant: set[str], k: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Retrieval eval: recall@k and MRR")
     parser.add_argument("--k", type=int, default=20, help="retrieval depth (default 20)")
+    parser.add_argument("--method", choices=["vector", "hybrid"], default="vector",
+                        help="retriever to evaluate (default vector)")
     args = parser.parse_args()
     k = args.k
 
-    retriever = Retriever()
-    ids, docs, metas = load_corpus(retriever.collection)
+    base = Retriever()
+    ids, docs, metas = load_corpus(base.collection)
+    # Reuse the loaded corpus for the BM25 index (no second sweep).
+    searcher = HybridRetriever(base, corpus=(ids, docs, metas)) if args.method == "hybrid" else base
     golden = load_golden()
 
     rows = []
@@ -89,9 +94,9 @@ def main() -> None:
         relevant = relevant_ids(item, ids, docs, metas)
         year = int(item["date_from"][:4])
 
-        uf = metrics_for(retriever.search(item["question"], k=k), relevant, k)
+        uf = metrics_for(searcher.search(item["question"], k=k), relevant, k)
         yr = metrics_for(
-            retriever.search(item["question"], k=k, year_from=year, year_to=year),
+            searcher.search(item["question"], k=k, year_from=year, year_to=year),
             relevant, k,
         )
         rows.append((item["id"], len(relevant), uf, yr))
@@ -105,7 +110,7 @@ def main() -> None:
     means = {c: {key: v / n for key, v in d.items()} for c, d in sums.items()}
 
     # --- table: unfiltered vs year-scoped ---
-    print(f"\nRetrieval eval — {n} questions, k={k}\n")
+    print(f"\nRetrieval eval — {n} questions, k={k}, method={args.method}\n")
     h = (f"{'question':<24}{'|R|':>5} | {'MRR':>5}{'R@10':>6}{'R@'+str(k):>6}{'hit10':>6}"
          f"  | {'MRR':>5}{'R@10':>6}{'R@'+str(k):>6}{'hit10':>6}")
     print(f"{'':<29} |  --- unfiltered ---    |  --- year-scoped ---")

@@ -13,17 +13,20 @@ from __future__ import annotations
 import argparse
 import textwrap
 
+from ask_parliament.hybrid import HybridRetriever
 from ask_parliament.retrieval import Retriever
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Top-k semantic search over parliamentary speeches",
+        description="Top-k search over parliamentary speeches",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("Examples:")[1],
     )
     parser.add_argument("query", help="natural-language query (any language BGE-m3 knows)")
     parser.add_argument("--k", type=int, default=8, help="number of results (default 8)")
+    parser.add_argument("--hybrid", action="store_true",
+                        help="fuse BM25 keyword search with vector search (RRF)")
     parser.add_argument("--country", help="country code filter, e.g. AT")
     parser.add_argument("--year-from", type=int, help="earliest year (inclusive)")
     parser.add_argument("--year-to", type=int, help="latest year (inclusive)")
@@ -35,7 +38,8 @@ def main() -> None:
     args = parser.parse_args()
 
     retriever = Retriever()
-    hits = retriever.search(
+    searcher = HybridRetriever(retriever) if args.hybrid else retriever
+    hits = searcher.search(
         args.query,
         k=args.k,
         countries=[args.country] if args.country else None,
@@ -45,12 +49,16 @@ def main() -> None:
         party=args.party,
     )
 
-    t = retriever.last_timings
-    print(f"\n{len(hits)} results  (embed {t['embed_s']:.2f}s, search {t['search_s']:.3f}s)\n")
+    t = searcher.last_timings
+    timing = ", ".join(f"{name} {secs:.2f}s" for name, secs in t.items())
+    mode = "hybrid" if args.hybrid else "semantic"
+    print(f"\n{len(hits)} results [{mode}]  ({timing})\n")
     for rank, h in enumerate(hits, 1):
         status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
-        print(f"[{rank}] sim={h.similarity:.3f}  {h.speaker} ({h.party}{status})  "
-              f"{h.date}  {h.country}")
+        # In hybrid mode, similarity 0.0 means the dense side didn't surface it —
+        # it's here on the strength of the BM25 keyword match alone.
+        sim = "keyword-only" if (args.hybrid and h.similarity == 0.0) else f"sim={h.similarity:.3f}"
+        print(f"[{rank}] {sim}  {h.speaker} ({h.party}{status})  {h.date}  {h.country}")
         print(f"    {h.cap_domain} | {h.topic_name} | {h.segment_id}")
         text = h.text if args.chars == 0 else h.text[: args.chars]
         ellipsis = "…" if 0 < args.chars < len(h.text) else ""

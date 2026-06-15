@@ -13,6 +13,7 @@ import streamlit as st
 
 from ask_parliament.config import GENERATION_MODEL, GENERATION_MODEL_QUALITY
 from ask_parliament.generation import generate_answer
+from ask_parliament.hybrid import HybridRetriever
 from ask_parliament.retrieval import Retriever
 
 st.set_page_config(page_title="Ask Parliament", page_icon="🏛️", layout="wide")
@@ -22,6 +23,12 @@ st.set_page_config(page_title="Ask Parliament", page_icon="🏛️", layout="wid
 def get_retriever() -> Retriever:
     """One Retriever per app run — loads BGE-m3 once, not per question."""
     return Retriever()
+
+
+@st.cache_resource(show_spinner="Building keyword (BM25) index…")
+def get_hybrid(_retriever: Retriever) -> HybridRetriever:
+    """Hybrid retriever, built once per app run (BM25 index over all speeches)."""
+    return HybridRetriever(_retriever)
 
 
 @st.cache_data(show_spinner="Reading filter options…")
@@ -66,6 +73,11 @@ with st.sidebar:
         "speeches. Semantic search already finds on-topic speeches without it.",
     )
     top_k = st.slider("Speeches to retrieve (top-k)", 3, 20, 8)
+    retrieval_mode = st.radio(
+        "Retrieval", ["Hybrid (semantic + keyword)", "Semantic only"],
+        help="Hybrid fuses BM25 keyword matching with dense vector search via "
+        "reciprocal rank fusion — better on exact terms (names, specific phrases).",
+    )
 
     st.divider()
     model = st.selectbox(
@@ -101,9 +113,11 @@ if prompt := st.chat_input("Ask about parliamentary debates…"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    searcher = retriever if retrieval_mode == "Semantic only" else get_hybrid(retriever)
+
     with st.chat_message("assistant"):
         with st.spinner("Retrieving speeches and generating an answer…"):
-            hits = retriever.search(
+            hits = searcher.search(
                 prompt,
                 k=top_k,
                 countries=sel_countries or None,
@@ -116,11 +130,10 @@ if prompt := st.chat_input("Ask about parliamentary debates…"):
         st.markdown(result.answer)
         render_sources(result.sources)
 
-        t = retriever.last_timings
+        retrieval_s = sum(searcher.last_timings.values())  # works for both retrievers
         caption = (
             f"{result.model} · {result.input_tokens} in / {result.output_tokens} out tokens · "
-            f"embed {t.get('embed_s', 0):.2f}s · search {t.get('search_s', 0):.2f}s · "
-            f"generate {result.latency_s:.2f}s"
+            f"retrieval {retrieval_s:.2f}s · generate {result.latency_s:.2f}s"
         )
         st.caption(caption)
 

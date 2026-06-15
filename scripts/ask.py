@@ -15,6 +15,7 @@ import textwrap
 
 from ask_parliament.config import GENERATION_MODEL
 from ask_parliament.generation import generate_answer
+from ask_parliament.hybrid import HybridRetriever
 from ask_parliament.retrieval import Retriever
 
 
@@ -26,6 +27,7 @@ def main() -> None:
     )
     parser.add_argument("question", help="natural-language question")
     parser.add_argument("--k", type=int, default=8, help="speeches to retrieve (default 8)")
+    parser.add_argument("--hybrid", action="store_true", help="fuse BM25 + vector (RRF)")
     parser.add_argument("--country", help="country code filter, e.g. AT")
     parser.add_argument("--year-from", type=int, help="earliest year (inclusive)")
     parser.add_argument("--year-to", type=int, help="latest year (inclusive)")
@@ -35,7 +37,8 @@ def main() -> None:
     args = parser.parse_args()
 
     retriever = Retriever()
-    hits = retriever.search(
+    searcher = HybridRetriever(retriever) if args.hybrid else retriever
+    hits = searcher.search(
         args.question, k=args.k,
         countries=[args.country] if args.country else None,
         year_from=args.year_from, year_to=args.year_to,
@@ -53,10 +56,9 @@ def main() -> None:
         print(f"  [{i}] sim={h.similarity:.3f}  {h.speaker} ({h.party}{status})  "
               f"{h.date}  {h.cap_domain}")
 
-    rt = retriever.last_timings
+    retrieval_s = sum(searcher.last_timings.values())
     print(f"\n{result.model} | in {result.input_tokens} tok, out {result.output_tokens} tok "
-          f"| embed {rt.get('embed_s', 0):.2f}s, search {rt.get('search_s', 0):.3f}s, "
-          f"generate {result.latency_s:.2f}s")
+          f"| retrieval {retrieval_s:.2f}s, generate {result.latency_s:.2f}s")
 
 
 if __name__ == "__main__":

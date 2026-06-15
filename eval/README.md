@@ -69,14 +69,44 @@ at least what's reported here.
 
 **Where it's genuinely weak.** `minimum_wage` and `pension_reform` score ~0 even
 year-scoped: the target debates are phrased very differently from the query, and
-exact-term matching would catch them where dense vectors don't. That's the clearest
-argument for the **hybrid BM25 + vector** stretch goal — the eval points right at
-where it would pay off.
+exact-term matching might catch them where dense vectors don't — which motivated
+trying hybrid retrieval (below).
+
+## Hybrid (BM25 + vector) vs vector
+
+`--method hybrid` fuses BM25 keyword search with the dense retriever using
+Reciprocal Rank Fusion (see [../src/ask_parliament/hybrid.py](../src/ask_parliament/hybrid.py)).
+Measured against the same golden set:
+
+| method | condition | MRR | recall@10 | recall@20 | hit@10 |
+|---|---|---|---|---|---|
+| vector | unfiltered | 0.23 | 0.04 | 0.08 | 0.40 |
+| hybrid | unfiltered | 0.23 | 0.04 | 0.06 | 0.40 |
+| vector | year-scoped | **0.50** | 0.11 | 0.21 | 0.80 |
+| hybrid | year-scoped | 0.42 | 0.11 | **0.22** | 0.80 |
+
+**Hybrid is roughly a wash here — and that's the finding, not a failure.** It's a
+genuine trade, visible per-question: hybrid *helps* exact-term and recurring
+queries (`climate_targets` 0.33 → 1.00, `pension_reform` and `minimum_wage` off
+the floor, `ukraine_invasion` to rank 1) but *hurts* queries where the dense
+retriever was already perfect (`temelin_nuclear` 1.00 → 0.11, `vaccination_mandate`
+1.00 → 0.50). RRF rewards *consensus*: a speech both retrievers like beats one only
+the dense side ranks first, so a lone dense winner gets demoted.
+
+Two honest caveats temper the apparent regression. First, some of that demotion is
+our conservative ground truth: hybrid surfaces *other* genuinely on-topic speeches
+from adjacent dates that aren't in our single-debate judged set, pushing the judged
+ones down. Second, BM25 over machine-translated, salutation-heavy speeches is noisy.
+Net: hit@10 is identical (0.80) and recall@20 is marginally better, so hybrid mainly
+broadens coverage of exact-term queries without clearly beating dense retrieval on
+this corpus. A tuned fusion weight (favouring the dense side) is the obvious next
+step — but tuning on 15 questions would just overfit, so it's left as future work.
 
 ## Run it
 
 ```bash
-python eval/run_eval.py            # k = 20
+python eval/run_eval.py                    # vector, k = 20
+python eval/run_eval.py --method hybrid     # hybrid (BM25 + vector)
 python eval/run_eval.py --k 30
 ```
 
