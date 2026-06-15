@@ -16,7 +16,7 @@ Working end to end over **99,089 Austrian speeches (1996–2022)**: ingestion �
 grounded generation → chat UI → evaluation. The corpus is currently Austria; the schema and
 filters are built to take Croatia and the UK later.
 
-> 📸 _Screenshot / GIF of the app goes here._
+![Ask Parliament chat UI — a COVID-19 question answered from Austrian parliamentary speeches, with sidebar filters for country, year range, policy domain, retrieval method, and model](demo_ss.png)
 
 ## Run it
 
