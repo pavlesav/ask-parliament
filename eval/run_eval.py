@@ -1,135 +1,144 @@
-"""Retrieval evaluation over the golden set: recall@k and MRR.
+"""Multi-country retrieval evaluation — synthetic known-item retrieval.
 
-Ground truth, per question, is defined lexically and embedding-independently:
-the speeches matching a distinctive phrase within the anchor debate's date window
-(the criterion lives in golden_set.jsonl, so it is fully auditable). We then run
-the BGE-m3 semantic retriever and measure how well it surfaces those speeches.
+For a sample of speeches drawn from across the parliaments, an LLM writes a natural
+question that the speech answers; we then retrieve over the *whole* corpus and check
+whether (and at what rank) that source speech comes back. This measures retrieval
+quality across all 29 countries without any hand-labeling, and lets us compare plain
+vector search against the agentic pipeline (query transform + rerank + self-correct)
+head to head.
 
-Two conditions are reported:
-
-  unfiltered  — query the whole 27-year corpus with no metadata filter. A hard
-                test: the same topic recurs on other dates, and those equally
-                relevant speeches (not in our single-debate judged set) displace
-                judged ones, so this is a conservative lower bound.
-  year-scoped — also pass the debate's year as a filter, mirroring how the app is
-                actually used (the sidebar year slider). Isolates the effect of
-                metadata filtering on finding a specific debate.
+Known-item caveat: the question is derived from the target speech, so this is an
+optimistic, *relative* measure — fair for comparing methods and catching regressions,
+not an absolute recall figure. Other speeches may also be relevant but aren't credited.
 
 Usage:
-    python eval/run_eval.py            # k=20
-    python eval/run_eval.py --k 30
+    python eval/run_eval.py                          # 2 speeches/country, both methods, k=10
+    python eval/run_eval.py --per-country 3 --method agentic
+    python eval/run_eval.py --countries AT,GB,FR,GR --k 20
+
+Needs the index served (QDRANT_URL) and ANTHROPIC_API_KEY in .env.
 """
 from __future__ import annotations
 
 import argparse
-import json
-import re
-from pathlib import Path
+import time
 
-from ask_parliament.hybrid import HybridRetriever
+import anthropic
+import pandas as pd
+from dotenv import load_dotenv
+
+from ask_parliament.config import GENERATION_MODEL, PARSED_DIR, REPO_ROOT
 from ask_parliament.retrieval import Retriever
 
-GOLDEN_PATH = Path(__file__).parent / "golden_set.jsonl"
+load_dotenv(REPO_ROOT / ".env")
+
+_QUESTION_SYSTEM = (
+    "You are given one parliamentary speech. Write ONE natural, specific question in "
+    "English that a person could ask and that THIS speech answers — about its topic and "
+    "stance, not its wording. Output only the question, nothing else."
+)
 
 
-def load_golden() -> list[dict]:
-    lines = GOLDEN_PATH.read_text(encoding="utf-8").splitlines()
-    return [json.loads(ln) for ln in lines if ln.strip()]
+def sample_speeches(countries, per_country, seed, min_chars, max_chars) -> list[dict]:
+    """Draw `per_country` speeches from each country's parsed parquet (reproducible)."""
+    rows: list[dict] = []
+    for cc in countries:
+        pq = PARSED_DIR / f"{cc}.parquet"
+        if not pq.exists():
+            print(f"  (skip {cc}: no parquet)")
+            continue
+        df = pd.read_parquet(pq, columns=["id", "text", "country", "date"])
+        df = df[df["text"].str.len().between(min_chars, max_chars)]
+        if df.empty:
+            continue
+        rows += df.sample(min(per_country, len(df)), random_state=seed).to_dict("records")
+    return rows
 
 
-def load_corpus(collection) -> tuple[list[str], list[str], list[dict]]:
-    """Pull all (id, document, metadata) from the index, paginated."""
-    ids, docs, metas = [], [], []
-    for offset in range(0, collection.count(), 10_000):
-        g = collection.get(include=["documents", "metadatas"], limit=10_000, offset=offset)
-        ids += g["ids"]
-        docs += g["documents"]
-        metas += g["metadatas"]
-    return ids, docs, metas
+def gen_question(client: anthropic.Anthropic, text: str, model: str) -> str:
+    resp = client.messages.create(
+        model=model, max_tokens=100, system=_QUESTION_SYSTEM,
+        messages=[{"role": "user", "content": text[:3000]}],
+    )
+    return next((b.text for b in resp.content if b.type == "text"), "").strip()
 
 
-def relevant_ids(item: dict, ids, docs, metas) -> set[str]:
-    """Ground-truth relevant set: phrase match within the anchor date window."""
-    rx = re.compile(item["pattern"], re.I)
-    d0, d1 = item["date_from"], item["date_to"]
+def rank_of(hits, target_id: str) -> int | None:
+    for i, h in enumerate(hits, 1):
+        if h.id == target_id:
+            return i
+    return None
+
+
+def evaluate(searcher, samples, questions, k: int) -> dict:
+    """Mean reciprocal rank + hit@1/5/10 over the samples (relevant set = the source)."""
+    rr = hit1 = hit5 = hit10 = found = 0.0
+    per_country: dict[str, list[float]] = {}
+    for s, q in zip(samples, questions):
+        rank = rank_of(searcher.search(q, k=k), s["id"])
+        r = 1.0 / rank if rank else 0.0
+        rr += r
+        hit1 += rank == 1
+        hit5 += bool(rank and rank <= 5)
+        hit10 += bool(rank and rank <= 10)
+        found += bool(rank)
+        per_country.setdefault(s["country"], []).append(r)
+    n = len(samples)
     return {
-        ids[i]
-        for i in range(len(ids))
-        if d0 <= metas[i]["date"] <= d1 and rx.search(docs[i])
-    }
-
-
-def metrics_for(hits, relevant: set[str], k: int) -> dict:
-    """recall@5/10/k, reciprocal rank of first hit, hit@10 for one query."""
-    ranks = [i + 1 for i, h in enumerate(hits) if h.id in relevant]
-    first = ranks[0] if ranks else None
-    n = len(relevant)
-    return {
-        "first": first,
-        "rr": 1.0 / first if first else 0.0,
-        "r5": sum(r <= 5 for r in ranks) / n if n else 0.0,
-        "r10": sum(r <= 10 for r in ranks) / n if n else 0.0,
-        "rk": len(ranks) / n if n else 0.0,
-        "hit10": 1.0 if first and first <= 10 else 0.0,
+        "mrr": rr / n, "hit1": hit1 / n, "hit5": hit5 / n, "hit10": hit10 / n,
+        "found": found / n, "n": n,
+        "per_country": {c: sum(v) / len(v) for c, v in sorted(per_country.items())},
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Retrieval eval: recall@k and MRR")
-    parser.add_argument("--k", type=int, default=20, help="retrieval depth (default 20)")
-    parser.add_argument("--method", choices=["vector", "hybrid"], default="vector",
-                        help="retriever to evaluate (default vector)")
-    args = parser.parse_args()
-    k = args.k
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--per-country", type=int, default=2, help="speeches sampled per country (default 2)")
+    p.add_argument("--countries", help="comma-separated codes (default: all in the index)")
+    p.add_argument("--k", type=int, default=10, help="retrieval depth (default 10)")
+    p.add_argument("--method", choices=["plain", "agentic", "both"], default="both")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--min-chars", type=int, default=400)
+    p.add_argument("--max-chars", type=int, default=2000)
+    a = p.parse_args()
 
-    base = Retriever()
-    ids, docs, metas = load_corpus(base.collection)
-    # Reuse the loaded corpus for the BM25 index (no second sweep).
-    searcher = HybridRetriever(base, corpus=(ids, docs, metas)) if args.method == "hybrid" else base
-    golden = load_golden()
+    retriever = Retriever()
+    countries = ([c.strip() for c in a.countries.split(",")] if a.countries
+                 else retriever.facets().countries)
 
-    rows = []
-    sums = {c: {"mrr": 0.0, "r10": 0.0, "rk": 0.0, "hit10": 0.0} for c in ("uf", "yr")}
-    for item in golden:
-        relevant = relevant_ids(item, ids, docs, metas)
-        year = int(item["date_from"][:4])
+    print(f"Sampling {a.per_country}/country across {len(countries)} parliaments…")
+    samples = sample_speeches(countries, a.per_country, a.seed, a.min_chars, a.max_chars)
+    if not samples:
+        print("No speeches sampled — is the parsed corpus present?")
+        return
 
-        uf = metrics_for(searcher.search(item["question"], k=k), relevant, k)
-        yr = metrics_for(
-            searcher.search(item["question"], k=k, year_from=year, year_to=year),
-            relevant, k,
-        )
-        rows.append((item["id"], len(relevant), uf, yr))
-        for c, m in (("uf", uf), ("yr", yr)):
-            sums[c]["mrr"] += m["rr"]
-            sums[c]["r10"] += m["r10"]
-            sums[c]["rk"] += m["rk"]
-            sums[c]["hit10"] += m["hit10"]
+    print(f"Generating {len(samples)} questions with {GENERATION_MODEL}…")
+    client = anthropic.Anthropic(max_retries=2)
+    t0 = time.time()
+    questions = [gen_question(client, s["text"], GENERATION_MODEL) for s in samples]
+    print(f"  ({time.time() - t0:.0f}s)\n")
 
-    n = len(golden)
-    means = {c: {key: v / n for key, v in d.items()} for c, d in sums.items()}
+    methods = ["plain", "agentic"] if a.method == "both" else [a.method]
+    searchers = {"plain": retriever}
+    if "agentic" in methods:
+        from ask_parliament.agentic import AgenticRetriever
+        searchers["agentic"] = AgenticRetriever(retriever)
 
-    # --- table: unfiltered vs year-scoped ---
-    print(f"\nRetrieval eval — {n} questions, k={k}, method={args.method}\n")
-    h = (f"{'question':<24}{'|R|':>5} | {'MRR':>5}{'R@10':>6}{'R@'+str(k):>6}{'hit10':>6}"
-         f"  | {'MRR':>5}{'R@10':>6}{'R@'+str(k):>6}{'hit10':>6}")
-    print(f"{'':<29} |  --- unfiltered ---    |  --- year-scoped ---")
-    print(h)
-    print("-" * len(h))
-    for qid, nr, uf, yr in rows:
-        print(f"{qid:<24}{nr:>5} | {uf['rr']:>5.2f}{uf['r10']:>6.2f}{uf['rk']:>6.2f}{uf['hit10']:>6.0f}"
-              f"  | {yr['rr']:>5.2f}{yr['r10']:>6.2f}{yr['rk']:>6.2f}{yr['hit10']:>6.0f}")
-    print("-" * len(h))
-    print(f"{'MEAN':<24}{'':>5} | {means['uf']['mrr']:>5.2f}{means['uf']['r10']:>6.2f}"
-          f"{means['uf']['rk']:>6.2f}{means['uf']['hit10']:>6.2f}"
-          f"  | {means['yr']['mrr']:>5.2f}{means['yr']['r10']:>6.2f}"
-          f"{means['yr']['rk']:>6.2f}{means['yr']['hit10']:>6.2f}")
-    print(f"\nunfiltered:  MRR={means['uf']['mrr']:.3f} · recall@10={means['uf']['r10']:.3f} "
-          f"· recall@{k}={means['uf']['rk']:.3f} · hit@10={means['uf']['hit10']:.3f}")
-    print(f"year-scoped: MRR={means['yr']['mrr']:.3f} · recall@10={means['yr']['r10']:.3f} "
-          f"· recall@{k}={means['yr']['rk']:.3f} · hit@10={means['yr']['hit10']:.3f}")
-    print("\n|R| = size of the judged relevant set (one specific debate). MRR = reciprocal "
-          "rank of\nthe first relevant speech. hit10 = a relevant speech in the top 10.")
+    results = {}
+    for m in methods:
+        print(f"Evaluating [{m}] over the full corpus (k={a.k})…")
+        t0 = time.time()
+        results[m] = evaluate(searchers[m], samples, questions, a.k)
+        print(f"  ({time.time() - t0:.0f}s)")
+
+    print(f"\nKnown-item retrieval — {len(samples)} speeches, {len(countries)} countries, k={a.k}\n")
+    print(f"{'method':<10}{'MRR':>7}{'hit@1':>8}{'hit@5':>8}{'hit@10':>8}{'found':>8}")
+    print("-" * 49)
+    for m in methods:
+        r = results[m]
+        print(f"{m:<10}{r['mrr']:>7.3f}{r['hit1']:>8.2f}{r['hit5']:>8.2f}{r['hit10']:>8.2f}{r['found']:>8.2f}")
+    print("\nMRR = mean reciprocal rank of the source speech. hit@k = source in the top k. "
+          "found = source\nanywhere in the top k. Higher is better (max 1.0).")
 
 
 if __name__ == "__main__":

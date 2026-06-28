@@ -45,7 +45,7 @@ _META_FIELDS = {
     "Topic": "cap_topic",       # ParlaMint's automatic CAP top-level topic
 }
 
-# Fields where an empty cell should read as "-" (Chroma/Qdrant-friendly, matches app).
+# Fields where an empty cell should read as "-" (index-friendly, matches the app).
 _TIDY_EMPTY = [
     "text_id", "title", "term", "body", "subcorpus", "party", "party_name",
     "party_status", "party_orientation", "speaker_id", "speaker", "gender", "cap_topic",

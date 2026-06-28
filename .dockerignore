@@ -1,0 +1,26 @@
+# Keep the build context small — none of this belongs in an image.
+.venv/
+venv/
+.git/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Data & stores (mounted at runtime, never baked in)
+data/
+qdrant_db/
+qdrant_storage/
+*.pkl
+*.parquet
+
+# Secrets & local cruft
+.env
+*.log
+.idea/
+.vscode/
+.ipynb_checkpoints/
+
+# Dev bits the images don't need
+eval/
+scripts/

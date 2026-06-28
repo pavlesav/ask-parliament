@@ -1,28 +1,27 @@
-# Scaling pipeline — full ParlaMint 5.0
+# Corpus pipeline — full ParlaMint 5.0
 
-Take Ask Parliament from the Austria-only demo to the **full ParlaMint 5.0**
-corpus (29 parliaments, ~8M speeches, ~1.2B words). Three stages, each resumable
-and independent:
+Build the index for the **full ParlaMint 5.0** corpus (29 parliaments, ~8M
+utterances, ~1.2B words). Four stages, each resumable and independent:
 
 ```
-download_parlamint.py   →   parse_parlamint.py   →   embed_corpus.py
-   (network, CPU)              (CPU, laptop-ok)         (GPU batch job)
- raw/{CC}/…txt/            parsed/{CC}.parquet      embeddings/{CC}/shard_*.npy
+download_parlamint.py → parse_parlamint.py → embed_corpus.py → build_qdrant_index.py
+   (network, CPU)         (CPU, laptop-ok)     (GPU batch job)    (CPU; needs Qdrant)
+ raw/{CC}/…txt/        parsed/{CC}.parquet   embeddings/{CC}/    Qdrant "speeches"
+                                              shard_*.npy         + facets.json
 ```
 
 Data source: **ParlaMint 5.0** on CLARIN.SI (handle `11356/2004`), **CC BY 4.0**,
 direct download, no login. We use the **native** plain text (BGE-m3 is multilingual
 and cross-lingual, so English queries still hit native speeches) and the **English
 TSV metadata** (uniform `Speaker_role` + per-speech CAP `Topic`). Embeddings are
-**recomputed from scratch** with `BAAI/bge-m3`, so this index is one uniform cosine
-space, independent of the thesis vectors.
+computed with `BAAI/bge-m3`, so the index is one uniform cross-lingual cosine space.
 
 ## Setup
 
 ```bash
-pip install -r requirements.txt          # base app deps
-pip install -r requirements-scale.txt    # + requests, pyarrow, CUDA torch (see file)
-pip install -e .                         # registers ask_parliament for the scripts
+pip install -e .                         # package + deps (incl. pyarrow) from pyproject.toml
+# The embedding step needs a CUDA torch build matching your driver, e.g.:
+pip install torch --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ## Run order
@@ -38,6 +37,22 @@ python scripts/scale/parse_parlamint.py                     # all downloaded cou
 
 # 3. Embed on the GPU (resumable, shard by shard).
 python scripts/scale/embed_corpus.py                        # all parsed countries
+
+# 4. Load the shards into a Qdrant index (resumable, country by country).
+#    Embedded local Qdrant only suits small subsets — for the full ~3.4M-vector
+#    corpus run a Qdrant server and point at it (HNSW, fast, bounded RAM):
+docker run -d --name qdrant -p 6333:6333 -v "${PWD}/qdrant_storage:/qdrant/storage" qdrant/qdrant
+$env:QDRANT_URL = "http://localhost:6333"                   # PowerShell; export on bash
+python scripts/scale/build_qdrant_index.py                  # all embedded countries
+#    or a subset / smoke test:  --countries LV
+```
+
+Then serve it (same `QDRANT_URL` env) — see the main [README](../../README.md) for the
+FastAPI backend + Streamlit frontend, or `docker compose up`. The CLIs hit Qdrant directly:
+
+```bash
+python scripts/search.py "renewable energy" --country GR --year-from 2015
+python scripts/ask.py "What did MPs say about energy prices?" --agentic
 ```
 
 ## Resumability & parallelism
@@ -74,11 +89,15 @@ data/parlamint/
                                            #   party, party_status, cap_topic, ...
   embeddings/{CC}/shard_00000.npy          # float16, L2-normalized, dim 1024
   embeddings/{CC}/manifest.json            # rows, shard_size, model, dtype, ...
+  facets.json                              # filter values for the app (written by step 4)
 ```
 
 Vectors are float16 and unit-norm: ~2 GB per million speeches per language, so the
-full corpus is on the order of tens of GB. At this scale prefer **Qdrant or FAISS**
-over local Chroma for the index step (next phase).
+full corpus is on the order of tens of GB. The index step (`build_qdrant_index.py`)
+loads these shards into **Qdrant**; at full scale use a **Qdrant server** (embedded
+local mode is brute-force and only suits small subsets — it warns past 20k points).
+The build script and retriever pick the server automatically when `QDRANT_URL` is set,
+so the same code serves a laptop subset or the full corpus.
 
 ## Validate without a GPU (what was tested on the laptop)
 

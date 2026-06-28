@@ -1,0 +1,57 @@
+# Ask Parliament — three services: Qdrant (vectors), API (retrieval + generation),
+# web (Streamlit UI). Bring it up with:  docker compose up --build
+#
+# Prereqs: a populated ./qdrant_storage (run scripts/scale/build_qdrant_index.py
+# against the qdrant service first), ./data/parlamint/facets.json, and
+# ANTHROPIC_API_KEY in .env. The api service wants an NVIDIA GPU (see below).
+
+services:
+  qdrant:
+    image: qdrant/qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - HF_HOME=/models
+    env_file:
+      - .env                       # provides ANTHROPIC_API_KEY
+    volumes:
+      - ./data/parlamint:/app/data/parlamint:ro   # facets.json for /meta
+      - hf_models:/models                          # cache models across restarts
+    depends_on:
+      - qdrant
+    ports:
+      - "8000:8000"
+    # GPU — needs the NVIDIA Container Toolkit. Remove this block to run CPU-only
+    # (everything works, but the cross-encoder reranker becomes very slow).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+volumes:
+  hf_models:

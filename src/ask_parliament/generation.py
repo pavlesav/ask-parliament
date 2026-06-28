@@ -16,7 +16,7 @@ import anthropic
 from dotenv import load_dotenv
 
 from ask_parliament.config import GENERATION_MODEL, REPO_ROOT
-from ask_parliament.retrieval import RetrievedSpeech
+from ask_parliament.models import RetrievedSpeech
 
 # Load ANTHROPIC_API_KEY from the repo-root .env (never hardcoded, gitignored).
 load_dotenv(REPO_ROOT / ".env")
@@ -24,18 +24,19 @@ load_dotenv(REPO_ROOT / ".env")
 MAX_TOKENS = 1024  # answers are meant to be concise; well under any timeout
 
 SYSTEM_PROMPT = """You answer questions about parliamentary debates using ONLY \
-the numbered speeches provided in the user's message. These are real speeches \
-from the Austrian Parliament (Nationalrat); non-English speeches have been \
-machine-translated to English, so quote their substance rather than exact wording.
+the numbered speeches provided in the user's message. These are real speeches from \
+national parliaments across Europe (the ParlaMint corpus), each given in its \
+ORIGINAL language. Read them in whatever language they are in, but always WRITE \
+YOUR ANSWER IN ENGLISH, and quote their substance rather than exact wording.
 
 Rules:
 - Base every statement only on the provided speeches. Do not use outside knowledge \
-or assumptions about what was said.
+or assumptions about what was said. (If a speech happens to state a fact, you may \
+report it and cite that speech — grounding in a retrieved speech is exactly the goal.)
 - Cite the speeches you draw on with bracketed numbers like [1] or [2], matching \
 the numbers in the context. Attach a citation to each claim.
-- Speeches from one debate are grouped under a "Debate:" header in the order they \
-were spoken; turns marked "· context" are the surrounding exchange, given for \
-background. Cite whichever speech a statement actually comes from.
+- The speeches come from different parliaments and dates; attribute each view to its \
+speaker (and country/date when relevant), and cite whichever speech it comes from.
 - If the provided speeches do not contain enough information to answer, say so \
 plainly (e.g. "The retrieved speeches don't address this") instead of guessing.
 - Be concise and neutral. Attribute views to the speakers, not to yourself.
@@ -57,29 +58,16 @@ class GenerationResult:
 
 
 def format_context(hits: list[RetrievedSpeech]) -> str:
-    """Render speeches as numbered blocks with citation headers.
+    """Render speeches as numbered blocks with a citation header each.
 
-    Consecutive speeches from the same segment (set up by expand_to_segments) are
-    introduced with a "Debate:" header so the model can see the exchange as one
-    conversation; context turns are flagged. Numbering follows list order, so [n]
-    matches the n-th speech everywhere it is shown (prompt and Sources panel).
+    Numbering follows list order, so [n] matches the n-th speech everywhere it is
+    shown (the prompt and the Sources panel).
     """
-    blocks, num, i, n = [], 0, 0, len(hits)
-    while i < n:
-        seg = hits[i].segment_id
-        j = i
-        while j < n and hits[j].segment_id == seg:
-            j += 1
-        run = hits[i:j]
-        if seg not in ("-", "") and len(run) > 1:
-            blocks.append(f"--- Debate: {run[0].topic_name} · {run[0].date} ---")
-        for h in run:
-            num += 1
-            status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
-            tag = "" if h.is_anchor else " · context"
-            header = f"[{num}] {h.speaker} ({h.party}{status}) — {h.date} — {h.cap_domain}{tag}"
-            blocks.append(f"{header}\n{h.text.strip()}")
-        i = j
+    blocks = []
+    for num, h in enumerate(hits, 1):
+        status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
+        header = f"[{num}] {h.speaker} ({h.party}{status}) — {h.country} — {h.date} — {h.cap_domain}"
+        blocks.append(f"{header}\n{h.text.strip()}")
     return "\n\n".join(blocks)
 
 

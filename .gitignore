@@ -1,9 +1,13 @@
 # Secrets — never commit
 .env
 
-# Data & vector store — never commit
+# Local Claude Code settings (machine-specific permissions)
+.claude/settings.local.json
+
+# Data & vector stores — never commit (gitignore patterns can't have inline comments)
 data/
-chroma_db/
+qdrant_db/
+qdrant_storage/
 *.pkl
 *.parquet
 
@@ -21,6 +25,9 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Eval run artefacts (machine-specific; the golden set itself is tracked)
+eval/results/
 
 # Misc
 *.log

@@ -1,0 +1,4 @@
+# Streamlit frontend deps (Dockerfile.web). The UI is a thin HTTP client over the
+# API — no models, no torch, no vector store — so the image stays small.
+streamlit>=1.35
+requests>=2.31

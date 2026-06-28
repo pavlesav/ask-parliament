@@ -1,39 +1,36 @@
-"""Central configuration: paths, model names, corpus-selection constants.
+"""Central configuration: paths, model names, and pipeline constants.
 
-Everything the pipeline treats as a decision lives here, so each script reads
-the same values and the choices are documented in one place.
+Every decision the pipeline treats as a knob lives here, so each script reads the
+same values and the choices are documented in one place.
 """
 import os
 from pathlib import Path
+
+
+def resolve_device() -> str:
+    """'cuda' when a GPU is visible, else 'cpu'. torch is imported lazily so the
+    config module stays cheap to import for code that doesn't load a model."""
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
 
 # --- Paths ---------------------------------------------------------------
 # Repo root = two levels above this file (src/ask_parliament/config.py).
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# The thesis repo is a sibling of this repo; its data folder really is named
-# "data folder" (with a space) — see DATA_MAP.md §2.
-THESIS_DATA_DIR = REPO_ROOT.parent / "master-thesis" / "code" / "data folder"
-AT_FINAL_PKL = THESIS_DATA_DIR / "AT" / "AT_final.pkl"
-
-# Persistent Chroma store (gitignored).
-CHROMA_DIR = REPO_ROOT / "chroma_db"
-COLLECTION_NAME = "speeches_at"
-
-# --- Corpus selection (Phase 1 decision: Austria, full range 1996-2022) ---
-# Country code stored in every record's metadata (the store is single-country
-# today; the field keeps the schema honest for a future HR ingest).
-COUNTRY = "AT"
-# Regular speakers only: drops ~125k Chairperson procedural turns and 440 Guests.
-SPEAKER_ROLE = "Regular"
-# Drop trivially short interventions (interjection fragments, one-liners).
-MIN_TEXT_CHARS = 300
-# Expected row count after filtering, verified in Phase 0 (DATA_MAP.md §9).
-# The build script warns if the actual count drifts from this.
-EXPECTED_SPEECH_COUNT = 99_089
+# Qdrant store for the multi-country corpus (gitignored). Embedded on-disk by
+# default; set QDRANT_URL to point the same client at a running Qdrant server
+# instead (the production path) — no other code changes.
+QDRANT_PATH = REPO_ROOT / "qdrant_db"
+QDRANT_URL = os.environ.get("QDRANT_URL")  # e.g. "http://localhost:6333"; None -> embedded
+QDRANT_COLLECTION = "speeches"
 
 # --- Embeddings ------------------------------------------------------------
-# Must match the thesis: BAAI/bge-m3, 1024-d, cosine space. Some stored vectors
-# are chunk-averaged and not unit-norm, so cosine (not dot product) is required.
+# BAAI/bge-m3: 1024-d, multilingual/cross-lingual. Vectors are L2-normalised at
+# embed time, and search uses cosine.
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_DIM = 1024
 
@@ -42,11 +39,27 @@ EMBEDDING_DIM = 1024
 GENERATION_MODEL = "claude-haiku-4-5"
 GENERATION_MODEL_QUALITY = "claude-sonnet-4-6"
 
-# --- Scaling: full ParlaMint 5.0 corpus (recompute embeddings on GPU) --------
+# --- Retrieval quality: reranking + agentic query transformation ------------
+# Cross-encoder reranker — same family as bge-m3, multilingual, so it scores the
+# native-language speeches directly. Loaded lazily; runs on GPU if torch sees one.
+RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
+RERANK_MAX_LENGTH = 512        # query+speech truncation for the cross-encoder (lead is enough)
+# Agentic pipeline knobs.
+QUERY_TRANSFORM_MODEL = GENERATION_MODEL  # cheap model for query rewriting / HyDE
+PER_QUERY_LIMIT = 40           # vector hits fetched per query variant
+# Pool fed into the cross-encoder (and the RRF pool size in the agentic path). Tuned
+# on the golden set (eval/tune_rerank_pool.py): going 60 -> 150 improved rerank MRR,
+# precision@10 and nDCG@10 together; beyond ~150 precision keeps creeping but MRR falls
+# off as the cross-encoder wades through more near-duplicates. 150 is the balance point.
+RERANK_CANDIDATES = 150
+RERANK_SCORE_FLOOR = 0.30      # if the top reranked score is below this, the loop self-corrects
+AGENTIC_MAX_ROUNDS = 1         # corrective re-retrieval rounds after the first pass
+
+# --- Corpus: full ParlaMint 5.0 (29 parliaments) ----------------------------
 # ParlaMint 5.0 lives on CLARIN.SI (CC BY 4.0, direct download, no login): one
-# .tgz per country/region. The scale pipeline (scripts/scale/) uses the native
-# plain-text + English TSV metadata and recomputes BGE-m3 vectors from scratch,
-# so the scaled index is a uniform space independent of the thesis vectors.
+# .tgz per country/region. The pipeline (scripts/scale/) uses the native
+# plain-text + English TSV metadata and computes BGE-m3 vectors, so the index is
+# one uniform cross-lingual space.
 PARLAMINT_VERSION = "5.0"
 PARLAMINT_HANDLE = "11356/2004"
 PARLAMINT_PAGE = f"https://www.clarin.si/repository/xmlui/handle/{PARLAMINT_HANDLE}"
@@ -64,9 +77,13 @@ DATA_DIR = Path(os.environ.get("PARLAMINT_DATA_DIR", str(REPO_ROOT / "data" / "p
 RAW_DIR = DATA_DIR / "raw"          # extracted ParlaMint-{CC}.txt/ trees
 PARSED_DIR = DATA_DIR / "parsed"    # {CC}.parquet — one tidy row per speech
 EMB_DIR = DATA_DIR / "embeddings"   # {CC}/shard_*.npy + manifest.json
+# Facets sidecar written by the index build, read by the app (so the filter
+# widgets don't require sweeping millions of payloads).
+FACETS_PATH = DATA_DIR / "facets.json"
 
-# Speech selection at scale (mirrors the Austria demo: Regular speakers only,
-# drop trivially short turns). Role is the canonical English value in -meta-en.tsv.
+# Speech selection: Regular speakers only (drop Chairperson/Guest procedural
+# turns), and drop trivially short turns. Role is the canonical English value in
+# the -meta-en.tsv files.
 SCALE_SPEAKER_ROLE = "Regular"
 SCALE_MIN_TEXT_CHARS = 300
 

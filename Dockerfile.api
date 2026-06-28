@@ -1,0 +1,21 @@
+# Ask Parliament — FastAPI backend (retrieval + reranking + generation).
+# Needs a GPU at runtime for the reranker to be fast (see docker-compose.yml).
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models
+
+# Torch first, in its own layer (big, rarely changes). The CUDA 12.8 wheels bundle
+# the CUDA libraries, so a slim base + the NVIDIA Container Toolkit at runtime is
+# enough — no nvidia/cuda base image required.
+RUN pip install torch --index-url https://download.pytorch.org/whl/cu128
+
+# Deps are declared in pyproject.toml, so `pip install -e .` pulls them in.
+COPY pyproject.toml ./
+COPY src ./src
+RUN pip install -e .
+
+EXPOSE 8000
+CMD ["uvicorn", "ask_parliament.api:app", "--host", "0.0.0.0", "--port", "8000"]

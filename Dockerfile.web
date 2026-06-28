@@ -1,0 +1,16 @@
+# Ask Parliament — Streamlit frontend (thin HTTP client over the API).
+# No models, no torch — a small, fast image.
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+COPY requirements-web.txt ./
+RUN pip install -r requirements-web.txt
+
+COPY app.py ./
+
+EXPOSE 8501
+CMD ["streamlit", "run", "app.py", \
+     "--server.port", "8501", "--server.address", "0.0.0.0", "--server.headless", "true"]

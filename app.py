@@ -1,108 +1,97 @@
-"""Ask Parliament — Streamlit chat UI.
+"""Ask Parliament — Streamlit chat UI (thin client over the FastAPI backend).
 
-Run from the repo root:
-    streamlit run app.py
+This frontend holds no models and no vector store: it calls the API
+(`ask_parliament.api`) over HTTP for everything — filter facets via /meta and
+grounded answers via /ask — so it stays light enough to run in a tiny container.
+Point it at the backend with the API_URL env var (default http://localhost:8000).
 
-Sidebar filters constrain retrieval; each answer shows an expandable Sources
-section and a token/latency caption. The retriever (and the BGE-m3 model it
-loads) is cached for the whole app run, so the model loads once, not per question.
+Run the API first, then:  streamlit run app.py
 """
 from __future__ import annotations
 
+import os
+from types import SimpleNamespace
+
+import requests
 import streamlit as st
 
-from ask_parliament.config import GENERATION_MODEL, GENERATION_MODEL_QUALITY
-from ask_parliament.generation import generate_answer
-from ask_parliament.hybrid import HybridRetriever
-from ask_parliament.retrieval import Retriever
+API_URL = os.environ.get("API_URL", "http://localhost:8000").rstrip("/")
 
 st.set_page_config(page_title="Ask Parliament", page_icon="🏛️", layout="wide")
 
 
-@st.cache_resource(show_spinner="Loading retriever and embedding model…")
-def get_retriever() -> Retriever:
-    """One Retriever per app run — loads BGE-m3 once, not per question."""
-    return Retriever()
+@st.cache_data(show_spinner="Reading filter options from the API…")
+def get_meta() -> dict:
+    r = requests.get(f"{API_URL}/meta", timeout=30)
+    r.raise_for_status()
+    return r.json()
 
 
-@st.cache_resource(show_spinner="Building keyword (BM25) index…")
-def get_hybrid(_retriever: Retriever) -> HybridRetriever:
-    """Hybrid retriever, built once per app run (BM25 index over all speeches)."""
-    return HybridRetriever(_retriever)
+def ask_api(payload: dict) -> dict:
+    r = requests.post(f"{API_URL}/ask", json=payload, timeout=300)
+    r.raise_for_status()
+    return r.json()
 
 
-@st.cache_data(show_spinner="Reading filter options…")
-def get_facets(_retriever: Retriever):
-    # _retriever is prefixed with "_" so Streamlit doesn't try to hash it.
-    return _retriever.facets()
-
-
-def render_sources(sources) -> None:
+def render_sources(sources: list[dict]) -> None:
     """Expandable list of the speeches an answer was grounded in.
 
-    Matched speeches show their similarity; sibling turns added for debate context
-    are flagged instead. Numbering matches the [n] citations in the answer.
+    Sources arrive as plain dicts from the API; wrap each in a namespace so the
+    rendering reads as attribute access. Each shows its similarity (and the
+    cross-encoder rerank score when present); numbering matches the [n] citations.
     """
     if not sources:
         return
-    n_matched = sum(h.is_anchor for h in sources)
-    label = f"Sources ({n_matched} matched"
-    label += f" + {len(sources) - n_matched} context)" if len(sources) > n_matched else ")"
-    with st.expander(label):
-        prev_seg = None
-        for i, h in enumerate(sources, 1):
-            if h.is_anchor:
-                score = f"similarity {h.similarity:.3f}"
-            else:
-                score = "context · same debate"
-                if h.segment_id != prev_seg:  # head the debate group once
-                    st.caption(f"↳ {h.topic_name} · {h.date}")
-            prev_seg = h.segment_id
+    hits = [SimpleNamespace(**s) for s in sources]
+    with st.expander(f"Sources ({len(hits)})"):
+        for i, h in enumerate(hits, 1):
+            score = f"similarity {h.similarity:.3f}"
+            if h.rerank_score is not None:
+                score += f" · rerank {h.rerank_score:.3f}"
             status = f", {h.party_status}" if h.party_status not in ("-", "") else ""
             st.markdown(
                 f"**[{i}]** {h.speaker} ({h.party}{status}) · {h.date} · "
                 f"{h.country} · *{h.cap_domain}* · {score}"
             )
             st.markdown(f"> {h.text.strip()}")
-            if i < len(sources):
+            if i < len(hits):
                 st.divider()
 
 
-retriever = get_retriever()
-facets = get_facets(retriever)
+try:
+    meta = get_meta()
+except Exception as err:  # noqa: BLE001 — surface a clear message if the backend is down
+    st.error(f"Can't reach the API at {API_URL} — is the backend running? ({err})")
+    st.stop()
 
 # --- Sidebar filters (apply to the next question asked) --------------------
 with st.sidebar:
     st.header("Filters")
     st.caption("Filters apply to the next question you ask.")
 
-    sel_countries = st.multiselect("Country", facets.countries, default=facets.countries)
+    sel_countries = st.multiselect("Country", meta["countries"], default=meta["countries"])
     year_from, year_to = st.slider(
-        "Year range", facets.year_min, facets.year_max,
-        (facets.year_min, facets.year_max),
+        "Year range", meta["year_min"], meta["year_max"],
+        (meta["year_min"], meta["year_max"]),
     )
     sel_domains = st.multiselect(
-        "Policy domain (optional)", facets.cap_domains,
+        "Policy domain (optional)", meta["cap_domains"],
         help="Leave empty (the default) to search all speeches. Domain labels are "
         "approximate — assigned per debate segment — so filtering may miss relevant "
         "speeches. Semantic search already finds on-topic speeches without it.",
     )
     top_k = st.slider("Speeches to retrieve (top-k)", 3, 20, 8)
-    retrieval_mode = st.radio(
-        "Retrieval", ["Hybrid (semantic + keyword)", "Semantic only"],
-        help="Hybrid fuses BM25 keyword matching with dense vector search via "
-        "reciprocal rank fusion — better on exact terms (names, specific phrases).",
-    )
-    expand_debate = st.checkbox(
-        "Expand to full debate", value=True,
-        help="Small-to-big retrieval: after finding the best-matching speeches, "
-        "also pull the surrounding turns from the same debate so the answer has "
-        "conversational context. Citations stay pinned to the matched speech.",
+    agentic = st.checkbox(
+        "🧠 Agentic retrieval", value=True,
+        help="Query transformation (paraphrases + a hypothetical-answer / HyDE query) + "
+        "cross-encoder reranking + self-correcting re-retrieval when the top results look "
+        "weak. Better recall and precision; adds an LLM call so it's slower. Turn off for "
+        "fast plain semantic search.",
     )
 
     st.divider()
     model = st.selectbox(
-        "Generation model", [GENERATION_MODEL, GENERATION_MODEL_QUALITY],
+        "Generation model", meta["models"],
         help="Haiku is cheaper/faster; Sonnet is higher quality.",
     )
     if st.button("Clear chat"):
@@ -112,8 +101,9 @@ with st.sidebar:
 # --- Header ----------------------------------------------------------------
 st.title("🏛️ Ask Parliament")
 st.caption(
-    "Grounded question-answering over Austrian parliamentary speeches "
-    f"({facets.year_min}–{facets.year_max}). Answers cite only retrieved speeches."
+    f"Grounded question-answering over {len(meta['countries'])} European parliaments "
+    f"(ParlaMint, {meta['year_min']}–{meta['year_max']}). Speeches are in their original "
+    "language; answers are in English and cite only retrieved speeches."
 )
 
 if "messages" not in st.session_state:
@@ -134,37 +124,42 @@ if prompt := st.chat_input("Ask about parliamentary debates…"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    searcher = retriever if retrieval_mode == "Semantic only" else get_hybrid(retriever)
+    # Selecting every country is the same as no country filter — send null.
+    countries = None if set(sel_countries) == set(meta["countries"]) else (sel_countries or None)
+    spinner_msg = (
+        "Transforming the query, retrieving, reranking, self-correcting…"
+        if agentic else "Retrieving speeches and generating an answer…"
+    )
 
     with st.chat_message("assistant"):
-        with st.spinner("Retrieving speeches and generating an answer…"):
-            hits = searcher.search(
-                prompt,
-                k=top_k,
-                countries=sel_countries or None,
-                year_from=year_from,
-                year_to=year_to,
-                cap_domains=sel_domains or None,
-            )
-            if expand_debate:
-                # retriever is the base vector Retriever; it owns the collection
-                # the siblings are fetched from (hybrid shares the same one).
-                hits = retriever.expand_to_segments(hits)
-            result = generate_answer(prompt, hits, model=model)
+        with st.spinner(spinner_msg):
+            try:
+                result = ask_api({
+                    "question": prompt, "k": top_k, "countries": countries,
+                    "year_from": year_from, "year_to": year_to,
+                    "cap_domains": sel_domains or None, "model": model, "agentic": agentic,
+                })
+            except Exception as err:  # noqa: BLE001
+                st.error(f"Request failed: {err}")
+                st.stop()
 
-        st.markdown(result.answer)
-        render_sources(result.sources)
+        st.markdown(result["answer"])
+        render_sources(result["sources"])
 
-        retrieval_s = sum(searcher.last_timings.values())  # works for both retrievers
         caption = (
-            f"{result.model} · {result.input_tokens} in / {result.output_tokens} out tokens · "
-            f"retrieval {retrieval_s:.2f}s · generate {result.latency_s:.2f}s"
+            f"{result['model']} · {result['input_tokens']} in / {result['output_tokens']} out tokens · "
+            f"retrieval {result['retrieval_s']:.2f}s · generate {result['latency_s']:.2f}s"
         )
+        if agentic and result.get("trace"):
+            tr = result["trace"]
+            caption += f" · 🧠 {tr['n_variants']} query variants, top rerank {tr['top_rerank']}"
+            if tr["corrected"]:
+                caption += f", self-corrected ×{tr['rounds']}"
         st.caption(caption)
 
     st.session_state.messages.append({
         "role": "assistant",
-        "content": result.answer,
-        "sources": result.sources,
+        "content": result["answer"],
+        "sources": result["sources"],
         "caption": caption,
     })

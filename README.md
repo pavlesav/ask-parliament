@@ -1,163 +1,165 @@
 # Ask Parliament
 
-A retrieval-augmented chat app over Austrian parliamentary speeches (ParlaMint v5.0).
-Ask a question in natural language — *"What did MPs say about the 2015 refugee crisis?"* —
-and get an answer grounded **only** in retrieved speeches, with citations (speaker, party,
-date, policy domain) and sidebar filters (country, year range, policy domain, top-k).
+A retrieval-augmented chat app over **European parliamentary speeches** — the full
+[ParlaMint 5.0](https://www.clarin.si/repository/xmlui/handle/11356/2004) corpus: **3,399,888
+speeches across 29 parliaments (1996–2024)**. Ask a question in natural language —
+*"How did parliaments respond to rising energy prices?"* — and get an answer grounded **only**
+in retrieved speeches, with citations (speaker, party, country, date), across languages.
 
-Built on the corpus, BGE-m3 embeddings, and CAP policy-domain labels from my
-[master's thesis pipeline](https://github.com/pavlesav/master-thesis): the thesis produced
-the data; this repo turns it into a production-shaped RAG system built stage by stage — no
-RAG frameworks (no LangChain/LlamaIndex), every component written and explainable.
+Built stage by stage as a production-shaped RAG system, with **no RAG frameworks** (no
+LangChain/LlamaIndex) — every component is written directly and is explainable.
 
-## Status
+**Highlights**
+- **Cross-lingual.** Ask in English; retrieve speeches in their **original language** (BGE-m3 is
+  multilingual); answers come back in English.
+- **Agentic retrieval.** Query transformation (paraphrases + HyDE) → reciprocal-rank fusion →
+  cross-encoder **reranking** → a **self-correcting** re-retrieval loop (Corrective-RAG).
+- **Grounded generation.** Claude answers from the retrieved speeches only, with `[n]` citations,
+  and says so when the context doesn't support an answer.
+- **Service-split + containerised.** A FastAPI backend (models + retrieval + generation), a thin
+  Streamlit frontend, and Qdrant — wired together with `docker compose`.
 
-Working end to end over **99,089 Austrian speeches (1996–2022)**: ingestion → retrieval →
-grounded generation → chat UI → evaluation. The corpus is currently Austria; the schema and
-filters are built to take Croatia and the UK later.
+## How it works
 
-![Ask Parliament chat UI — a COVID-19 question answered from Austrian parliamentary speeches, with sidebar filters for country, year range, policy domain, retrieval method, and model](demo_ss.png)
+```
+ParlaMint .tgz ─► parse ─► BGE-m3 embed ─► Qdrant index
+                                              │
+   question ─►  Retriever (vector)  ──or──  AgenticRetriever (transform→rerank→self-correct)
+                                              │
+                                     grounded generation (Claude, cited)  ─►  answer
+```
+
+1. **Ingest** (`scripts/scale/`) — download each country's ParlaMint corpus, parse the native
+   plain text + English metadata into one tidy parquet per country (Regular speakers, ≥300 chars),
+   and embed with **BAAI/bge-m3** (1024-d, L2-normalised) into on-disk shards.
+2. **Index** (`scripts/scale/build_qdrant_index.py`) — load the shards into a **Qdrant** `speeches`
+   collection (cosine, HNSW, on-disk vectors, payload indexes for filtering). Writes a small
+   `facets.json` so the UI never sweeps millions of payloads.
+3. **Retrieve** (`src/ask_parliament/retrieval.py`, `agentic.py`) — embed the query and run top-k
+   cosine search with optional filters (country, year, CAP domain, party). The **agentic** mode
+   adds query transformation, [BGE-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)
+   reranking, and a correction loop that re-retrieves when the top results look weak.
+4. **Generate** (`generation.py`) — assemble the numbered speeches + question and ask Claude to
+   answer **only** from them, with `[n]` citations and an "insufficient evidence" guardrail.
+5. **Serve** — a **FastAPI** backend (`api.py`: `/health`, `/meta`, `/ask`) owns the models; the
+   **Streamlit** frontend (`app.py`) is a thin HTTP client; **Qdrant** holds the vectors.
 
 ## Run it
 
 ```bash
-pip install -r requirements.txt
-pip install -e .                 # registers the src/ask_parliament package
+pip install -e .                 # installs the package and its dependencies (pyproject.toml)
 # Put ANTHROPIC_API_KEY in .env (gitignored)
-python scripts/build_index.py    # build the Chroma index from the thesis pickle
-streamlit run app.py             # chat UI (opens http://localhost:8501)
 ```
 
-> **Note:** `build_index.py` reads the thesis's processed `AT_final.pkl` (the speeches +
-> precomputed BGE-m3 vectors), which is gitignored and not part of this repo — it's available
-> on request. Without it you can still read all the code and the evaluation methodology, but
-> can't build the index locally.
-
-CLIs for poking at the pipeline without the UI:
+### Build the corpus (one-time)
 
 ```bash
-python scripts/search.py "renewable energy" --year-from 2015 --k 8   # retrieval only
-python scripts/search.py "minimum wage" --hybrid                      # BM25 + vector
-python scripts/ask.py "How was mandatory vaccination debated?"        # retrieval + answer
-python eval/run_eval.py [--method hybrid]                            # retrieval metrics
+# The GPU embedding step needs a CUDA torch build matching your driver, e.g.:
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+
+python scripts/scale/download_parlamint.py     # ~6 GB of .tgz from CLARIN.SI (or --countries LV)
+python scripts/scale/parse_parlamint.py        # → data/parlamint/parsed/{CC}.parquet
+python scripts/scale/embed_corpus.py           # GPU → data/parlamint/embeddings/{CC}/*.npy
 ```
 
-## How it works
+See [scripts/scale/README.md](scripts/scale/README.md) for the resumable/parallel pipeline details.
 
-1. **Ingestion** ([scripts/build_index.py](scripts/build_index.py)) — loads the thesis
-   pickle, keeps substantive speeches (regular speakers, ≥300 chars), and upserts each
-   speech's **precomputed** BGE-m3 vector + text + citation metadata into a persistent
-   ChromaDB collection. The vectors are reused from the thesis, never recomputed.
-2. **Retrieval** ([src/ask_parliament/retrieval.py](src/ask_parliament/retrieval.py)) —
-   embeds the query with the same BGE-m3 model and runs top-k **cosine** search, with
-   optional metadata filters (country, year range, CAP domain, party). An optional
-   **hybrid** mode ([hybrid.py](src/ask_parliament/hybrid.py)) fuses BM25 keyword search
-   with the vector results via Reciprocal Rank Fusion.
-3. **Context assembly — small-to-big** ([src/ask_parliament/retrieval.py](src/ask_parliament/retrieval.py),
-   `expand_to_segments`) — the speech-level hits stay the citation anchors, but each is then
-   expanded to its sibling speeches in the same debate segment (ordered as they were spoken,
-   windowed and length-capped) so generation sees the surrounding exchange instead of isolated
-   turns. On by default; toggle off to compare.
-4. **Generation** ([src/ask_parliament/generation.py](src/ask_parliament/generation.py)) —
-   assembles the speeches (grouped by debate) + the question into a prompt and asks Claude to
-   answer **only** from that context, with `[n]` citations pinned to the speech each claim comes
-   from, and to say so when the context doesn't contain the answer. Returns a structured result
-   (answer + sources + token/latency).
-5. **UI** ([app.py](app.py)) — Streamlit chat with the sidebar filters, a retrieval-mode
-   toggle (hybrid vs semantic), an *Expand to full debate* toggle, an expandable *Sources*
-   section per answer (matched speeches vs added debate context), and a token/latency caption
-   so cost is visible.
+### Index + serve
 
-See [DATA_MAP.md](DATA_MAP.md) for the corpus inventory and schemas, and
-[CLAUDE.md](CLAUDE.md) for architecture decisions.
+```bash
+# Qdrant (a server is needed at full scale: HNSW, on-disk vectors, bounded RAM)
+docker run -d --name qdrant -p 6333:6333 -v "${PWD}/qdrant_storage:/qdrant/storage" qdrant/qdrant
+export QDRANT_URL=http://localhost:6333        # PowerShell: $env:QDRANT_URL="http://localhost:6333"
+python scripts/scale/build_qdrant_index.py     # load the shards (resumable)
 
-## Repository layout
-
+uvicorn ask_parliament.api:app --host 0.0.0.0 --port 8000   # API backend (wants a GPU)
+streamlit run app.py                                        # UI at http://localhost:8501
 ```
-ask-parliament/
-├── app.py                      # Streamlit chat UI
-├── scripts/
-│   ├── build_index.py          # ingest the thesis pickle → ChromaDB
-│   ├── search.py               # retrieval-only CLI (--hybrid optional)
-│   └── ask.py                  # retrieval + grounded answer CLI
-├── src/ask_parliament/
-│   ├── config.py               # paths, model names, filter constants
-│   ├── retrieval.py            # vector search, metadata filters, facets
-│   ├── hybrid.py               # BM25 + vector fusion (RRF)
-│   └── generation.py           # grounded answer generation (Claude)
-├── eval/
-│   ├── golden_set.jsonl        # 15 questions + reproducible relevance criteria
-│   ├── run_eval.py             # recall@k, MRR, hit@10
-│   └── README.md               # evaluation methodology
-├── DATA_MAP.md                 # corpus inventory (data provenance)
-└── CLAUDE.md                   # architecture decisions & build log
+
+### Or the whole stack in Docker
+
+```bash
+docker compose up --build      # qdrant + api + web → UI at http://localhost:8501
 ```
+
+Prereqs: a populated `./qdrant_storage` (run the index build against the `qdrant` service first),
+`./data/parlamint/facets.json`, and `ANTHROPIC_API_KEY` in `.env`. The `api` service requests an
+NVIDIA GPU via the Container Toolkit so the reranker is fast — remove the `deploy` block in
+`docker-compose.yml` to run CPU-only.
+
+### CLIs (talk to Qdrant directly)
+
+```bash
+python scripts/search.py "renewable energy" --country GR --year-from 2015   # retrieval only
+python scripts/ask.py "What did MPs say about energy prices?" --agentic      # retrieval + answer
+```
+
+## Evaluation
+
+Retrieval is scored across all 29 parliaments with **synthetic known-item retrieval**: sample
+speeches corpus-wide, have an LLM write a question each speech answers, then check whether (and at
+what rank) the source speech comes back — comparing **plain** vector search against the **agentic**
+pipeline. Full method and caveats in [eval/README.md](eval/README.md).
+
+```bash
+python eval/run_eval.py --per-country 2          # MRR, hit@1/5/10 for plain vs agentic
+```
+
+The pattern: **agentic improves ranking** — the cross-encoder reranker lifts the right speech
+toward rank 1 (higher MRR/hit@1) even when plain search already had it in the top *k*. The
+self-correction loop rarely fires, because dense retrieval over 3.4M multilingual speeches is
+already strong — reported honestly rather than assumed.
 
 ## Architecture choices
 
 | Decision | Choice | Why |
 |---|---|---|
-| Vector store | ChromaDB, persistent local dir | precomputed-embedding ingest + metadata filtering, zero infra |
-| Embeddings | BAAI/bge-m3 (1024-d, multilingual) | must match the thesis vectors so they can be reused |
-| Distance | cosine | some stored vectors are chunk-averaged and not unit-norm |
-| Retrieval unit | speech-level | clean citations; debate segments average 9–18 speeches |
-| Hybrid fusion | Reciprocal Rank Fusion (RRF) | combines BM25 + vector by rank, no score normalization |
-| Context assembly | small-to-big: retrieve speech, expand to its debate segment | conversational context for generation without losing per-speech citations; no re-embedding |
+| Vector store | Qdrant server (embedded for subsets) | scales to 3.4M: HNSW, on-disk vectors, bounded RAM, native payload filtering |
+| Embeddings | BAAI/bge-m3 (1024-d, multilingual) | one cross-lingual space; English queries retrieve native-language speeches |
+| Distance | cosine over L2-normalised vectors | standard for sentence embeddings |
+| Retrieval unit | speech-level | clean citations |
+| Agentic retrieval | query transform (multi-query + HyDE) → RRF → cross-encoder rerank → CRAG self-correct | recall from transforms, precision from reranking, robustness from a gated correction loop |
+| Reranker | BAAI/bge-reranker-v2-m3 (cross-encoder, GPU) | joint query–speech scoring; multilingual, pairs with bge-m3 |
 | Generation | Anthropic Claude (Haiku default, Sonnet switchable) | cheap iteration, quality on demand |
-| Evaluation | golden set, recall@k + MRR | explainable, no LLM-as-judge |
+| Serving | FastAPI backend + thin Streamlit frontend + Qdrant, via `docker compose` | backend owns the models so the UI is a model-free container; tiers scale independently |
+| Evaluation | synthetic known-item retrieval (plain vs agentic) | no hand-labeling; covers all 29 countries; fair relative measure |
 
-## Evaluation
+## Repository layout
 
-The interesting question for a RAG system is **does retrieval find the right speeches?** —
-if it does, generation has what it needs; if it doesn't, no prompt saves it. So the eval
-([eval/](eval/)) scores retrieval against a 15-question golden set spanning COVID/health,
-defence and foreign affairs, the 2015 migration crisis, banking and budget scandals, energy,
-and civil rights.
-
-Each question is tied to one real, identifiable debate. Ground truth — which speeches *should*
-come back — is defined **lexically and independently of the embeddings** (a distinctive phrase
-within the debate's date window), so it's reproducible and not circular: relevance is decided
-by keyword + date, then we test whether the *semantic* retriever surfaces those speeches from a
-one-line, often paraphrased question. No human labels, no LLM judge. Full methodology in
-[eval/README.md](eval/README.md).
-
-Two conditions, k = 20:
-
-| condition | MRR | recall@10 | hit@10 |
-|---|---|---|---|
-| unfiltered (whole 27-year corpus) | 0.23 | 0.04 | 0.40 |
-| year-scoped (as the sidebar slider is used) | **0.50** | **0.11** | **0.80** |
-
-Reading the numbers: **scoping to the year roughly doubles effectiveness** — for 12 of 15
-questions a speech from the *exact* target debate lands in the top 10. Unfiltered, the retriever
-still nails distinctive, time-bound debates (compulsory vaccination and Brexit return at rank 1)
-but dilutes recurring topics, since with no date cue the embeddings correctly return a topic from
-across all 27 years. Two caveats kept honest: recall@k looks low partly by construction (a
-relevant set is a whole debate of 7–68 speeches, so when |R| > k even perfect retrieval can't
-reach 1.0), and the unfiltered scores are a **conservative floor** because the same topic recurs
-on other dates whose speeches are relevant but not in our single-debate judged set.
-
-**Hybrid (BM25 + vector) retrieval** ([src/ask_parliament/hybrid.py](src/ask_parliament/hybrid.py),
-`run_eval.py --method hybrid`) fuses keyword and semantic results with Reciprocal Rank Fusion.
-Measured against the same set it's **roughly a wash** (year-scoped MRR 0.42 vs 0.50, identical
-hit@10, marginally better recall@20): it helps exact-term and recurring queries but demotes the
-cases where dense retrieval was already perfect, since RRF rewards consensus. That the eval
-*showed* this rather than assuming hybrid always wins is the point. Details in
-[eval/README.md](eval/README.md).
+```
+ask-parliament/
+├── app.py                      # Streamlit frontend — thin HTTP client over the API
+├── docker-compose.yml          # qdrant + api + web
+├── Dockerfile.api / .web       # backend (torch/CUDA + models) / frontend (light)
+├── scripts/
+│   ├── search.py / ask.py      # retrieval-only / retrieval+answer CLIs
+│   └── scale/                  # corpus pipeline: download → parse → embed → build_qdrant_index
+├── src/ask_parliament/
+│   ├── config.py               # paths, model names, knobs
+│   ├── models.py               # shared dataclasses (RetrievedSpeech, Facets) — import-light
+│   ├── parlamint.py            # ParlaMint 5.0 parser (native text + English metadata)
+│   ├── retrieval.py            # Qdrant vector search + metadata filters + facets
+│   ├── query_transform.py      # multi-query + HyDE + corrective rewrite (Claude)
+│   ├── rerank.py               # BGE-reranker-v2-m3 cross-encoder
+│   ├── agentic.py              # AgenticRetriever: transform → fuse → rerank → self-correct
+│   ├── generation.py           # grounded, cited answer generation (Claude)
+│   └── api.py                  # FastAPI backend: /health, /meta, /ask
+├── eval/                       # synthetic known-item retrieval eval (run_eval.py + README)
+└── CLAUDE.md                   # architecture decisions & build notes
+```
 
 ## Limitations
 
-- **One country.** Only Austria is indexed; the UK has no speech-level vectors in the thesis
-  data and Croatia is deferred. The schema and filters already accommodate both.
-- **English machine translation.** Austrian speeches are indexed and answered from their
-  English MT; quoting is faithful to meaning, not exact original wording.
-- **Noisy policy labels.** CAP domains are episode-level and LLM-assigned (~40% "Other/Mix"),
-  so the domain filter is optional and off by default — semantic search already finds on-topic
-  speeches without it.
-- **Retrieval is dense-first.** Hybrid BM25 + vector retrieval is implemented and selectable,
-  but the eval shows it's roughly neutral on this corpus — a tuned fusion weight (favouring the
-  dense side) is plausible future work, deliberately not tuned on 15 questions to avoid overfitting.
+- **No BM25 hybrid / debate-context expansion.** Dense + reranking only. In-memory BM25 over 3.4M
+  speeches doesn't fit (Qdrant sparse vectors are the way to add it), and the native ParlaMint
+  distribution exposes no debate-segment id (only a session id) to expand into.
+- **Native-language sources.** Retrieved speeches are shown in their original language; the model
+  reads them and answers in English, quoting substance not exact wording.
+- **Noisy policy labels.** CAP domains are episode-level and automatically assigned, so the domain
+  filter is optional and off by default — semantic search finds on-topic speeches without it.
+- **Eval is a relative measure.** Known-item retrieval is optimistic by construction (see
+  [eval/README.md](eval/README.md)); it compares methods fairly but isn't an absolute recall figure.
 
 ## License
 
-MIT
+Code: MIT. Data: ParlaMint 5.0 is CC BY 4.0 — cite the corpus if you publish or deploy.
