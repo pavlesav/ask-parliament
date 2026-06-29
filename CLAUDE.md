@@ -9,7 +9,8 @@ understands every stage", not "framework showcase".
 
 **Current state:** end to end and runnable — corpus pipeline (download → parse → embed) → Qdrant
 index → retrieval (plain vector + agentic) → grounded cited generation → FastAPI backend + thin
-Streamlit frontend → Docker compose → multi-country retrieval eval.
+Streamlit frontend → Docker compose → an eval suite (retrieval: known-item + corpus-verified golden
+set with ablations & CIs; generation: LLM-as-judge groundedness/citations + refusal).
 
 ## Hard rules
 
@@ -34,7 +35,7 @@ Streamlit frontend → Docker compose → multi-country retrieval eval.
 | Reranker | bge-reranker-v2-m3 (cross-encoder, GPU) | joint query–speech scoring; multilingual, pairs with bge-m3 |
 | Generation | Anthropic Claude (Haiku default, Sonnet switchable) | cheap iteration, quality on demand |
 | Serving | FastAPI backend + thin Streamlit frontend + Qdrant, via `docker compose` | backend owns the models so the UI is a model-free container; tiers deploy/scale independently |
-| Eval | synthetic known-item retrieval (plain vs agentic) | no hand-labeling; covers all 29 countries; fair relative measure |
+| Eval | known-item + corpus-verified golden set (ablations, bootstrap CIs) + LLM-judge generation eval | scores both retrieval ranking and answer quality (grounding/citations/refusal); covers all 29 countries |
 
 ## Corpus & pipeline
 
@@ -86,6 +87,9 @@ streamlit run app.py                                        # frontend (thin cli
 python scripts/search.py "renewable energy" --country GR --year-from 2015
 python scripts/ask.py "What did MPs say about energy prices?" --agentic
 
-# Eval — synthetic known-item retrieval, plain vs agentic, across all countries
-python eval/run_eval.py --per-country 2
+# Eval (see eval/README.md) — retrieval + generation across all countries
+python eval/run_all.py                     # build → retrieval → generation → report
+python eval/run_eval.py --per-country 2    # known-item retrieval, plain vs agentic
+python eval/retrieval_eval.py --k 10       # golden-set retrieval, all ablations + CIs
+python eval/generation_eval.py             # answer quality + refusal (LLM-as-judge)
 ```

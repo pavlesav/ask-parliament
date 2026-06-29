@@ -96,19 +96,35 @@ python scripts/ask.py "What did MPs say about energy prices?" --agentic      # r
 
 ## Evaluation
 
-Retrieval is scored across all 29 parliaments with **synthetic known-item retrieval**: sample
-speeches corpus-wide, have an LLM write a question each speech answers, then check whether (and at
-what rank) the source speech comes back — comparing **plain** vector search against the **agentic**
-pipeline. Full method and caveats in [eval/README.md](eval/README.md).
+A RAG system has two failure surfaces and the suite ([eval/](eval/), full method and caveats in
+[eval/README.md](eval/README.md)) measures both — across all 29 parliaments, comparing the plain
+and agentic pipelines, with timestamped provenance-stamped results and offline unit tests for the
+metric and judging code.
+
+**Retrieval** — two complementary views:
+- *Known-item* (`run_eval.py`): sample speeches corpus-wide, have an LLM write a question each
+  answers, then check at what rank the source speech comes back. Zero hand-labeling, but optimistic
+  and single-source.
+- *Golden set* (`retrieval_eval.py`): ~100 curated, **corpus-verified** European topics, each with a
+  cross-lingual relevance pattern, so *any* on-topic speech in *any* language counts — fixing the
+  under-crediting. Reports MRR, success@k, precision@k, nDCG@k with bootstrap CIs over four
+  **ablations** (`plain · rerank · transform · agentic`) that isolate each stage's contribution.
+
+**Generation** (`generation_eval.py`) — LLM-as-judge (Sonnet grading the Haiku generator): golden
+questions scored on groundedness, citation validity, and relevance; plus a `refusal_set.jsonl` of
+out-of-corpus questions that must be declined or answered only from a cited speech.
 
 ```bash
-python eval/run_eval.py --per-country 2          # MRR, hit@1/5/10 for plain vs agentic
+python eval/run_all.py                     # build → retrieval → generation → report
+python eval/run_eval.py --per-country 2    # known-item: MRR, hit@1/5/10 for plain vs agentic
+python eval/retrieval_eval.py --k 10       # golden set: all ablations, with CIs
+python -m pytest eval/tests -q             # offline unit tests (no Qdrant/API)
 ```
 
 The pattern: **agentic improves ranking** — the cross-encoder reranker lifts the right speech
-toward rank 1 (higher MRR/hit@1) even when plain search already had it in the top *k*. The
-self-correction loop rarely fires, because dense retrieval over 3.4M multilingual speeches is
-already strong — reported honestly rather than assumed.
+toward rank 1 even when plain search already had it in the top *k*. The self-correction loop rarely
+fires, because dense retrieval over 3.4M multilingual speeches is already strong — reported honestly
+rather than assumed.
 
 ## Architecture choices
 
@@ -122,7 +138,7 @@ already strong — reported honestly rather than assumed.
 | Reranker | BAAI/bge-reranker-v2-m3 (cross-encoder, GPU) | joint query–speech scoring; multilingual, pairs with bge-m3 |
 | Generation | Anthropic Claude (Haiku default, Sonnet switchable) | cheap iteration, quality on demand |
 | Serving | FastAPI backend + thin Streamlit frontend + Qdrant, via `docker compose` | backend owns the models so the UI is a model-free container; tiers scale independently |
-| Evaluation | synthetic known-item retrieval (plain vs agentic) | no hand-labeling; covers all 29 countries; fair relative measure |
+| Evaluation | known-item + corpus-verified golden set (ablations, CIs) + LLM-judge generation eval | scores both retrieval ranking and answer quality (grounding/citations/refusal); covers all 29 countries |
 
 ## Repository layout
 
@@ -144,7 +160,7 @@ ask-parliament/
 │   ├── agentic.py              # AgenticRetriever: transform → fuse → rerank → self-correct
 │   ├── generation.py           # grounded, cited answer generation (Claude)
 │   └── api.py                  # FastAPI backend: /health, /meta, /ask
-├── eval/                       # synthetic known-item retrieval eval (run_eval.py + README)
+├── eval/                       # retrieval (known-item + golden set) & generation (LLM-judge) eval + evallib/ + tests
 └── CLAUDE.md                   # architecture decisions & build notes
 ```
 
@@ -157,8 +173,9 @@ ask-parliament/
   reads them and answers in English, quoting substance not exact wording.
 - **Noisy policy labels.** CAP domains are episode-level and automatically assigned, so the domain
   filter is optional and off by default — semantic search finds on-topic speeches without it.
-- **Eval is a relative measure.** Known-item retrieval is optimistic by construction (see
-  [eval/README.md](eval/README.md)); it compares methods fairly but isn't an absolute recall figure.
+- **Eval is a relative measure.** Known-item retrieval is optimistic by construction, and the golden
+  set's pattern judge is a heuristic rather than human labels (see [eval/README.md](eval/README.md));
+  the suite compares methods fairly but the absolute numbers aren't a true recall figure.
 
 ## License
 
