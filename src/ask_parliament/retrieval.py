@@ -101,6 +101,7 @@ class Retriever:
             party_status=m["party_status"],
             cap_domain=m["cap_topic"],
             segment_id=m.get("text_id", "-"),  # parliamentary session id
+            text_en=m.get("text_en"),  # present once the ParlaMint-en payload is patched in
         )
 
     def search(

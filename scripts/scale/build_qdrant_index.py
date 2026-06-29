@@ -20,7 +20,6 @@ import argparse
 import json
 import logging
 import time
-import uuid
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +35,7 @@ from ask_parliament.config import (
     QDRANT_COLLECTION,
     QDRANT_PATH,
     QDRANT_URL,
+    point_id,
 )
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -44,9 +44,8 @@ log = logging.getLogger("build_qdrant_index")
 UPSERT_BATCH = 1_000  # points per upsert call
 CLIENT_TIMEOUT = 120  # generous: a wait=true upsert can briefly stall behind a segment flush
 INDEXING_THRESHOLD = 20_000  # Qdrant default; re-applied after the bulk load
-# Stable namespace so a speech id always maps to the same Qdrant point id
-# (Qdrant point ids must be uint/UUID; our ids are strings) -> idempotent reruns.
-_POINT_NS = uuid.uuid5(uuid.NAMESPACE_URL, "ask-parliament/speeches")
+# Speech id -> Qdrant point id mapping lives in config (config.point_id), so this
+# build and the payload patchers stay in lock-step on the id scheme.
 
 # Parquet column -> Qdrant payload key. Everything we filter, cite, or display on.
 PAYLOAD_COLUMNS = {
@@ -160,7 +159,20 @@ def upsert_country(client: QdrantClient, cc: str, force: bool) -> int:
             log.info("%s: %s/%s points present — re-upserting (idempotent by id)", cc, f"{have:,}", f"{manifest['n_rows']:,}")
 
     payloads = df.rename(columns=PAYLOAD_COLUMNS).to_dict(orient="records")
-    ids = [str(uuid.uuid5(_POINT_NS, p["speech_id"])) for p in payloads]
+    # Merge the English machine-translation sidecar (id -> text_en) if it's been built,
+    # so a fresh build carries the optional English view too. Missing/empty -> no key
+    # (the app falls back to the native text).
+    en_path = PARSED_DIR / f"{cc}_en.parquet"
+    if en_path.exists():
+        en = dict(pd.read_parquet(en_path).itertuples(index=False, name=None))
+        n_en = 0
+        for p in payloads:
+            t = en.get(p["speech_id"], "")
+            if t:
+                p["text_en"] = t
+                n_en += 1
+        log.info("%s: merged English text for %s/%s points", cc, f"{n_en:,}", f"{len(payloads):,}")
+    ids = [point_id(p["speech_id"]) for p in payloads]
 
     t0, done = time.time(), 0
     for start, end, vecs in iter_shards(cc, manifest):
@@ -214,7 +226,7 @@ def verify(client: QdrantClient, cc: str) -> None:
     """Self-retrieval probe: a stored vector should return its own point at score ~1.0."""
     manifest = load_manifest(cc)
     df = pd.read_parquet(PARSED_DIR / f"{cc}.parquet", columns=["id"])
-    probe_id = str(uuid.uuid5(_POINT_NS, df["id"].iloc[0]))
+    probe_id = point_id(df["id"].iloc[0])
     vec = np.load(EMB_DIR / cc / "shard_00000.npy")[0].astype(np.float32).tolist()
     hit = client.query_points(QDRANT_COLLECTION, query=vec, limit=1, with_payload=True).points[0]
     if hit.id != probe_id or hit.score < 0.99:

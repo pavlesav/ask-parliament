@@ -37,3 +37,4 @@ class RetrievedSpeech:
     cap_domain: str
     segment_id: str  # parliamentary session id (provenance)
     rerank_score: float | None = None  # cross-encoder relevance in [0,1] when reranked, else None
+    text_en: str | None = None  # English machine translation (ParlaMint-en) for display, if indexed

@@ -33,17 +33,23 @@ def ask_api(payload: dict) -> dict:
     return r.json()
 
 
-def render_sources(sources: list[dict]) -> None:
+def render_sources(sources: list[dict], show_english: bool = False) -> None:
     """Expandable list of the speeches an answer was grounded in.
 
     Sources arrive as plain dicts from the API; wrap each in a namespace so the
     rendering reads as attribute access. Each shows its similarity (and the
     cross-encoder rerank score when present); numbering matches the [n] citations.
+    When `show_english` is on, the speech body is swapped for ParlaMint's English
+    machine translation (`text_en`, returned with the source), falling back to the
+    original if a translation isn't indexed.
     """
     if not sources:
         return
     hits = [SimpleNamespace(**s) for s in sources]
     with st.expander(f"Sources ({len(hits)})"):
+        if show_english:
+            st.caption("🌐 Showing ParlaMint's machine translation to English — faithful, "
+                       "not official; consult the original for exact wording.")
         for i, h in enumerate(hits, 1):
             score = f"similarity {h.similarity:.3f}"
             if h.rerank_score is not None:
@@ -53,7 +59,8 @@ def render_sources(sources: list[dict]) -> None:
                 f"**[{i}]** {h.speaker} ({h.party}{status}) · {h.date} · "
                 f"{h.country} · *{h.cap_domain}* · {score}"
             )
-            st.markdown(f"> {h.text.strip()}")
+            text = (getattr(h, "text_en", None) or h.text) if show_english else h.text
+            st.markdown(f"> {text.strip()}")
             if i < len(hits):
                 st.divider()
 
@@ -94,6 +101,12 @@ with st.sidebar:
         "Generation model", meta["models"],
         help="Haiku is cheaper/faster; Sonnet is higher quality.",
     )
+    translate_sources = st.checkbox(
+        "🌐 Show sources in English", value=False,
+        help="Show the cited speeches in English. They're stored in each parliament's "
+        "original language; this displays ParlaMint's machine translation (ParlaMint-en). "
+        "The answer itself is always in English.",
+    )
     if st.button("Clear chat"):
         st.session_state.messages = []
         st.rerun()
@@ -114,7 +127,7 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant":
-            render_sources(msg.get("sources", []))
+            render_sources(msg.get("sources", []), translate_sources)
             if msg.get("caption"):
                 st.caption(msg["caption"])
 
@@ -144,7 +157,7 @@ if prompt := st.chat_input("Ask about parliamentary debates…"):
                 st.stop()
 
         st.markdown(result["answer"])
-        render_sources(result["sources"])
+        render_sources(result["sources"], translate_sources)
 
         caption = (
             f"{result['model']} · {result['input_tokens']} in / {result['output_tokens']} out tokens · "

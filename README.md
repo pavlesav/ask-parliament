@@ -11,7 +11,8 @@ LangChain/LlamaIndex) — every component is written directly and is explainable
 
 **Highlights**
 - **Cross-lingual.** Ask in English; retrieve speeches in their **original language** (BGE-m3 is
-  multilingual); answers come back in English.
+  multilingual); answers come back in English — and each cited speech can be **toggled to English**
+  (ParlaMint's own machine translation, joined into the index).
 - **Agentic retrieval.** Query transformation (paraphrases + HyDE) → reciprocal-rank fusion →
   cross-encoder **reranking** → a **self-correcting** re-retrieval loop (Corrective-RAG).
 - **Grounded generation.** Claude answers from the retrieved speeches only, with `[n]` citations,
@@ -150,6 +151,7 @@ ask-parliament/
 ├── scripts/
 │   ├── search.py / ask.py      # retrieval-only / retrieval+answer CLIs
 │   └── scale/                  # corpus pipeline: download → parse → embed → build_qdrant_index
+│                               #   (+ download_parlamint_en → add_english_text → patch_english_payload)
 ├── src/ask_parliament/
 │   ├── config.py               # paths, model names, knobs
 │   ├── models.py               # shared dataclasses (RetrievedSpeech, Facets) — import-light
@@ -169,8 +171,11 @@ ask-parliament/
 - **No BM25 hybrid / debate-context expansion.** Dense + reranking only. In-memory BM25 over 3.4M
   speeches doesn't fit (Qdrant sparse vectors are the way to add it), and the native ParlaMint
   distribution exposes no debate-segment id (only a session id) to expand into.
-- **Native-language sources.** Retrieved speeches are shown in their original language; the model
-  reads them and answers in English, quoting substance not exact wording.
+- **Native-language sources (with an English toggle).** Speeches are stored and shown in their
+  original language — the model reads them and answers in English, quoting substance not exact
+  wording. A sidebar toggle swaps each cited speech to ParlaMint's machine translation (ParlaMint-en);
+  it's faithful MT, not an official translation, so it's display-only and retrieval still runs on the
+  native text.
 - **Noisy policy labels.** CAP domains are episode-level and automatically assigned, so the domain
   filter is optional and off by default — semantic search finds on-topic speeches without it.
 - **Eval is a relative measure.** Known-item retrieval is optimistic by construction, and the golden

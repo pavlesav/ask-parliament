@@ -51,14 +51,28 @@ download_parlamint.py → parse_parlamint.py → embed_corpus.py → build_qdran
 Index notes: cosine, on-disk vectors, payload indexes on `country/year/cap_topic/party`. The build
 **defers HNSW indexing** during bulk load (`indexing_threshold=0`, re-enabled after) so upserts
 don't slow down / time out as the collection grows. It writes `data/parlamint/facets.json` so the
-app populates filters without sweeping millions of payloads. Point ids are `uuid5(speech_id)` →
-idempotent reruns. Per-country resume via a payload-filtered count.
+app populates filters without sweeping millions of payloads. Point ids are `config.point_id(speech_id)`
+= `uuid5(speech_id)` → idempotent reruns and a stable handle for payload patches. Per-country resume
+via a payload-filtered count.
+
+**English view (optional, display-only).** A second mini-pipeline pulls **ParlaMint-en.ana 5.0**
+(handle `11356/2006`, EasyNMT/OPUS-MT) so cited speeches can be shown in English. Each per-country
+`.ana.tgz` bundles a derived `ParlaMint-{CC}-en.txt/` plain-text subtree with the **native utterance
+ids**, so it joins straight onto the parsed speeches (100% coverage in the LV pilot). We **never
+re-embed** — English is a `text_en` payload field only:
+```
+download_parlamint_en.py → add_english_text.py → patch_english_payload.py
+   raw_en/{CC}/…txt/        parsed/{CC}_en.parquet   set_payload text_en on existing points
+```
+`build_qdrant_index.py` also merges `{CC}_en.parquet` on a fresh build. The retriever surfaces
+`text_en` on each hit; the UI toggle swaps it in, falling back to native text when absent.
 
 ## Module map (`src/ask_parliament/`)
 
 - `config.py` — paths, model names, knobs, `resolve_device()`.
 - `models.py` — `RetrievedSpeech`, `Facets` dataclasses (import-light; no heavy deps).
-- `parlamint.py` — ParlaMint 5.0 parser (native text + English metadata → tidy DataFrame).
+- `parlamint.py` — ParlaMint 5.0 parser (native text + English metadata → tidy DataFrame);
+  `read_english_texts()` reads the ParlaMint-en plain-text subtree for the optional English view.
 - `retrieval.py` — `Retriever`: Qdrant vector search, metadata filters, facets from the sidecar.
 - `query_transform.py` — multi-query + HyDE + corrective rewrite (one Haiku call each; best-effort).
 - `rerank.py` — `Reranker`: bge-reranker-v2-m3 cross-encoder, scores → sigmoid → [0,1].

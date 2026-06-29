@@ -4,6 +4,7 @@ Every decision the pipeline treats as a knob lives here, so each script reads th
 same values and the choices are documented in one place.
 """
 import os
+import uuid
 from pathlib import Path
 
 
@@ -27,6 +28,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 QDRANT_PATH = REPO_ROOT / "qdrant_db"
 QDRANT_URL = os.environ.get("QDRANT_URL")  # e.g. "http://localhost:6333"; None -> embedded
 QDRANT_COLLECTION = "speeches"
+
+# Stable mapping from a speech id (string) to its Qdrant point id (uuid). The index
+# build and any tool that patches payloads on existing points must agree on this, so
+# it lives here in one place. uuid5 is deterministic -> reruns are idempotent.
+POINT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "ask-parliament/speeches")
+
+
+def point_id(speech_id: str) -> str:
+    return str(uuid.uuid5(POINT_NAMESPACE, speech_id))
 
 # --- Embeddings ------------------------------------------------------------
 # BAAI/bge-m3: 1024-d, multilingual/cross-lingual. Vectors are L2-normalised at
@@ -63,6 +73,12 @@ AGENTIC_MAX_ROUNDS = 1         # corrective re-retrieval rounds after the first 
 PARLAMINT_VERSION = "5.0"
 PARLAMINT_HANDLE = "11356/2004"
 PARLAMINT_PAGE = f"https://www.clarin.si/repository/xmlui/handle/{PARLAMINT_HANDLE}"
+# ParlaMint-en.ana 5.0: the machine-translated (EasyNMT/OPUS-MT) English edition.
+# Each per-country .ana.tgz bundles a derived `ParlaMint-{CC}-en.txt/` plain-text
+# subtree — same `ID\ttext` layout and native utterance ids as the original corpus —
+# which is all we need to show cited speeches in English (we never re-embed English).
+PARLAMINT_EN_HANDLE = "11356/2006"
+PARLAMINT_EN_PAGE = f"https://www.clarin.si/repository/xmlui/handle/{PARLAMINT_EN_HANDLE}"
 
 # The 29 corpora in ParlaMint 5.0 (national parliaments + Spanish regional ones).
 PARLAMINT_COUNTRIES = [
@@ -75,6 +91,7 @@ PARLAMINT_COUNTRIES = [
 # the whole pipeline elsewhere (e.g. a sample dir while testing, or a big disk).
 DATA_DIR = Path(os.environ.get("PARLAMINT_DATA_DIR", str(REPO_ROOT / "data" / "parlamint")))
 RAW_DIR = DATA_DIR / "raw"          # extracted ParlaMint-{CC}.txt/ trees
+RAW_EN_DIR = DATA_DIR / "raw_en"    # extracted ParlaMint-{CC}-en.txt/ trees (English MT)
 PARSED_DIR = DATA_DIR / "parsed"    # {CC}.parquet — one tidy row per speech
 EMB_DIR = DATA_DIR / "embeddings"   # {CC}/shard_*.npy + manifest.json
 # Facets sidecar written by the index build, read by the app (so the filter

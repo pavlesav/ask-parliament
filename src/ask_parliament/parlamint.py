@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ask_parliament.config import RAW_DIR, SCALE_MIN_TEXT_CHARS, SCALE_SPEAKER_ROLE
+from ask_parliament.config import RAW_DIR, RAW_EN_DIR, SCALE_MIN_TEXT_CHARS, SCALE_SPEAKER_ROLE
 
 log = logging.getLogger("parlamint")
 
@@ -52,14 +52,35 @@ _TIDY_EMPTY = [
 ]
 
 
-def _read_text(txt_path: Path) -> dict[str, str]:
+def _read_text(txt_path: Path, errors: str = "strict") -> dict[str, str]:
     """Map utterance ID -> text from a session `.txt` (``ID\\ttext`` per line)."""
     out: dict[str, str] = {}
-    with txt_path.open(encoding="utf-8") as fh:
+    with txt_path.open(encoding="utf-8", errors=errors) as fh:
         for line in fh:
             uid, sep, text = line.rstrip("\n").partition("\t")
             if sep and text:
                 out[uid] = text
+    return out
+
+
+def read_english_texts(country: str, raw_en_dir: Path | None = None) -> dict[str, str]:
+    """Map native utterance id -> English machine translation for one country.
+
+    Reads the derived ``ParlaMint-{CC}-en.txt/`` plain-text subtree shipped inside the
+    ParlaMint-en.ana edition — same ``ID\\ttext`` layout as the native corpus, and keyed
+    by the *native* utterance ids, so it joins straight onto the parsed speeches. This
+    text is display-only (we never embed it). Decoding is tolerant because the MT output
+    occasionally carries stray bytes. Returns ``{}`` if the English edition isn't present.
+    """
+    raw_en_dir = raw_en_dir or RAW_EN_DIR
+    txt_root = raw_en_dir / country / f"ParlaMint-{country}-en.txt"
+    if not txt_root.is_dir():
+        return {}
+    out: dict[str, str] = {}
+    for txt_path in txt_root.rglob("*.txt"):
+        if txt_path.name == "00README.txt":
+            continue
+        out.update(_read_text(txt_path, errors="replace"))
     return out
 
 

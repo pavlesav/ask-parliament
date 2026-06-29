@@ -55,6 +55,30 @@ python scripts/search.py "renewable energy" --country GR --year-from 2015
 python scripts/ask.py "What did MPs say about energy prices?" --agentic
 ```
 
+## Optional: English view of cited speeches (ParlaMint-en)
+
+The UI can show each cited speech in English. The text is **ParlaMint's own machine
+translation** (ParlaMint-en.ana 5.0, handle `11356/2006`, EasyNMT/OPUS-MT) — not generated
+by us — joined onto the indexed speeches by their native utterance id. Vectors are **never
+re-computed**; English is a display-only payload field, so this just patches the existing
+index. Three resumable stages:
+
+```bash
+# A. Download the English edition + extract its derived plain-text subtree (big .tgz per
+#    country; only the `ParlaMint-{CC}-en.txt/` tree is kept, then the archive is deleted).
+python scripts/scale/download_parlamint_en.py               # all 29  (--countries LV for one)
+
+# B. Join to the indexed speeches -> parsed/{CC}_en.parquet (id, text_en). No Qdrant needed.
+python scripts/scale/add_english_text.py                    # reports per-country coverage (~100%)
+
+# C. Patch text_en onto the existing Qdrant points (payload-only; no re-embed, no rebuild).
+python scripts/scale/patch_english_payload.py               # needs QDRANT_URL up
+```
+
+A fresh `build_qdrant_index.py` run also merges `{CC}_en.parquet` automatically, so a
+from-scratch rebuild carries the English text too. If the edition isn't ingested, the
+toggle simply falls back to the original-language text.
+
 ## Resumability & parallelism
 
 - **Resume:** every stage skips work already done — a country with an `.extracted`
