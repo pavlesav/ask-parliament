@@ -80,7 +80,11 @@ def read_english_texts(country: str, raw_en_dir: Path | None = None) -> dict[str
     for txt_path in txt_root.rglob("*.txt"):
         if txt_path.name == "00README.txt":
             continue
-        out.update(_read_text(txt_path, errors="replace"))
+        for uid, text in _read_text(txt_path, errors="replace").items():
+            # Some editions (e.g. IT/SI/NO) bake the annotation marker into the utterance
+            # id (`…ana.u1` / `…ana.ud…`); the native ids drop it. Normalise so the join
+            # matches — a no-op for corpora whose ids never contained `.ana.`.
+            out[uid.replace(".ana.", ".")] = text
     return out
 
 
