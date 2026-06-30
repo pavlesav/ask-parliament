@@ -128,10 +128,19 @@ python eval/retrieval_eval.py --k 10       # golden set: all ablations, with CIs
 python -m pytest eval/tests -q             # offline unit tests (no Qdrant/API)
 ```
 
-The pattern: **agentic improves ranking** — the cross-encoder reranker lifts the right speech
-toward rank 1 even when plain search already had it in the top *k*. The self-correction loop rarely
-fires, because dense retrieval over 3.4M multilingual speeches is already strong — reported honestly
-rather than assumed.
+**Headline numbers** (golden set: 100 corpus-verified topics, k=10; mean [95% CI] — full method and
+caveats in [eval/README.md](eval/README.md)):
+
+| retrieval stage | MRR | success@10 | precision@10 | nDCG@10 |
+|---|---|---|---|---|
+| dense vector (plain) | 0.83 | 0.98 | 0.69 | 0.70 |
+| + cross-encoder rerank | **0.87** | **0.99** | **0.78** | **0.78** |
+
+Reranking lifts precision@10 by ~13% and nDCG by +0.08; the self-correction loop rarely fires —
+dense retrieval over 3.4M multilingual speeches is already strong, reported honestly rather than
+assumed. **Generation** (LLM-as-judge, Sonnet grading Haiku, n=32): groundedness **4.6/5**, citation
+validity **4.8/5**, answer relevance **5.0/5**, and **0% hallucination** on the out-of-corpus set
+(100% refused or grounded in a cited speech).
 
 ## Architecture choices
 
