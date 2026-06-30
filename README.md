@@ -9,6 +9,12 @@ in retrieved speeches, with citations (speaker, party, country, date), across la
 Built stage by stage as a production-shaped RAG system, with **no RAG frameworks** (no
 LangChain/LlamaIndex) — every component is written directly and is explainable.
 
+<div align="center">
+
+https://github.com/user-attachments/assets/1a9957e1-9642-4afe-bca6-b997f87de9a3
+
+</div>
+
 **Highlights**
 - **Cross-lingual.** Ask in English; retrieve speeches in their **original language** (BGE-m3 is
   multilingual); answers come back in English — and each cited speech can be **toggled to English**
