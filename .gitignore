@@ -1,8 +1,9 @@
 # Secrets — never commit
 .env
 
-# Local Claude Code settings (machine-specific permissions)
-.claude/settings.local.json
+# Local AI-assistant config (machine-specific, not part of the project)
+.claude/
+CLAUDE.md
 
 # Data & vector stores — never commit (gitignore patterns can't have inline comments)
 data/
