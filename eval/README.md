@@ -196,4 +196,5 @@ running it and reading the results:
 Each run writes a full JSON (`eval/results/<timestamp>_<kind>.json`) with provenance, config, every
 per-item record, and the aggregate summary, plus a headline line to `eval/results/history.jsonl`.
 `report.py` turns the newest runs into `eval/results/REPORT.md`. Results are gitignored — they're
-machine-specific artefacts, not source.
+machine-specific artefacts, not source. A snapshot of the latest report, the source of the numbers
+in the top-level README, is committed as [REPORT.md](REPORT.md).
