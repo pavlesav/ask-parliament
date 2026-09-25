@@ -21,7 +21,9 @@ dependencies = [
     # Serving: FastAPI backend + Streamlit frontend
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
+    "pydantic>=2.0",        # request models in api.py (also pulled in by fastapi)
     "requests>=2.31",
+    "urllib3>=1.26",        # download retries (also pulled in by requests)
     "streamlit>=1.35",
 ]
 # The GPU embedding step (scripts/scale/embed_corpus.py) also needs torch, which
