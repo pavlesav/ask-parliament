@@ -33,8 +33,9 @@ dependencies = [
 
 [project.optional-dependencies]
 # Dev/eval extras: the offline eval tests (metrics + relevance judge) run under
-# pytest with no Qdrant server and no API key — install with `pip install -e .[dev]`.
-dev = ["pytest>=8.0"]
+# pytest with no Qdrant server and no API key; matplotlib renders the README figures
+# (scripts/make_figures.py). Install with `pip install -e .[dev]`.
+dev = ["pytest>=8.0", "matplotlib>=3.8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
